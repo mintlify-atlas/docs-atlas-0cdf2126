@@ -1,7 +1,7 @@
 ---
-title: "Vineflower Public API Reference"
+title: "Vineflower Public API: Decompiler and Fernflower Reference"
 sidebarTitle: "API Reference"
-description: "Complete reference for the Vineflower public API: the Decompiler builder, DecompilerInstance, and the underlying Fernflower engine class."
+description: "Complete reference for the Vineflower public API: the Decompiler builder, Decompiler instance methods, and the underlying Fernflower engine."
 ---
 
 The Vineflower public API lives in the `org.jetbrains.java.decompiler.api` package and provides a fluent builder interface for configuring and running decompilation without touching internal engine classes. For most embedding use cases, `Decompiler.builder()` is the only entry point you need.
@@ -233,7 +233,7 @@ The following example decompiles a JAR to a folder, using a standard console log
 
 ```java DecompileExample.java
 import org.jetbrains.java.decompiler.api.Decompiler;
-import org.jetbrains.java.decompiler.main.decompiler.ConsoleDecompiler;
+import org.jetbrains.java.decompiler.main.decompiler.SingleFileSaver;
 import org.jetbrains.java.decompiler.main.extern.IFernflowerPreferences;
 import org.jetbrains.java.decompiler.main.extern.IFernflowerLogger;
 
@@ -247,7 +247,7 @@ public class DecompileExample {
     File runtimeJar = new File(System.getProperty("java.home") + "/lib/rt.jar");
 
     // Build a folder-based result saver (ships with Vineflower)
-    var saver = new ConsoleDecompiler.FileSaver(outputDir);
+    var saver = new SingleFileSaver(outputDir);
 
     Decompiler decompiler = Decompiler.builder()
         .inputs(inputJar)

@@ -1,7 +1,7 @@
 ---
-title: "Vineflower Decompilation Pipeline Architecture"
+title: "Vineflower Internal Architecture and Pipeline Stages"
 sidebarTitle: "Architecture"
-description: "Deep dive into Vineflower's 8-stage decompilation pipeline: CFG construction, statement structuring, expression parsing, SSA/SSAU forms, and the Java writer."
+description: "Vineflower decompilation pipeline: CFG construction, statement structuring, expression parsing, SSA and SSAU forms, and the Java writer."
 ---
 
 Vineflower transforms JVM bytecode into readable Java source through a multi-stage pipeline. Each stage takes the output of the previous one and refines it further — from raw bytes, to a control-flow graph, to a statement tree, to exprent expressions, and finally to formatted source text. Understanding this pipeline is essential if you want to write plugin passes, debug decompiler output, or contribute to the codebase.

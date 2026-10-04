@@ -1,5 +1,5 @@
 ---
-title: "What is Vineflower? Goals, Heritage, and Features"
+title: "Vineflower: Goals, Fork Heritage, and Key Features"
 sidebarTitle: "Introduction"
 description: "Vineflower is a modern Java & JVM language decompiler focused on output quality, speed, and extensibility — built on a decade of Fernflower heritage."
 ---
@@ -23,22 +23,22 @@ Special thanks to Stiver, JetBrains, the MinecraftForge Team, and the FabricMC T
 ## Key Features
 
 <CardGroup cols={2}>
-  <Card title="Java 21+ Language Support" icon="java">
+  <Card title="Java 21+ Language Support" icon="java" href="/usage/cli">
     Decompiles modern Java constructs including records, sealed classes, switch expressions, pattern matching, and text blocks — with support tested against Java 8 through Java 25.
   </Card>
-  <Card title="Multithreaded Decompilation" icon="bolt">
+  <Card title="Multithreaded Decompilation" icon="bolt" href="/usage/options">
     Vineflower parallelises class decompilation to take full advantage of modern multi-core hardware, significantly reducing decompilation time on large JARs.
   </Card>
-  <Card title="Plugin System" icon="puzzle-piece">
+  <Card title="Plugin System" icon="puzzle-piece" href="/plugins/overview">
     A first-class plugin API lets you register custom decompilation passes, supply your own variable-naming strategy, or even define a completely new language target (Kotlin and Scala plugins are bundled).
   </Card>
-  <Card title="CLI and Library Modes" icon="terminal">
+  <Card title="CLI and Library Modes" icon="terminal" href="/usage/cli">
     Run Vineflower directly from the command line with `java -jar vineflower.jar`, or embed it as a library using the fluent `Decompiler.builder()` API — no runtime dependencies required.
   </Card>
-  <Card title="Multiple JVM Language Support" icon="code">
+  <Card title="Multiple JVM Language Support" icon="code" href="/plugins/bundled-plugins">
     Beyond Java, bundled plugins add decompilation support for Kotlin and Scala class files, letting Vineflower handle mixed-language JVM projects out of the box.
   </Card>
-  <Card title="Clean, Formatted Output" icon="file-code">
+  <Card title="Clean, Formatted Output" icon="file-code" href="/usage/options">
     Vineflower automatically formats decompiled output to produce clean, readable source rather than dense one-liners — making auditing and exploration significantly easier.
   </Card>
 </CardGroup>

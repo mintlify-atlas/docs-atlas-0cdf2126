@@ -1,5 +1,5 @@
 ---
-title: "Installing Vineflower: JAR, Gradle, and Maven"
+title: "Install Vineflower: Standalone JAR, Gradle, or Maven"
 sidebarTitle: "Installation"
 description: "Install Vineflower as a standalone executable JAR, a Gradle dependency, or a Maven dependency — with notes on JAR variants and Java version requirements."
 ---
@@ -231,16 +231,16 @@ System.out.println("Vineflower " + version);
 ## Summary
 
 <CardGroup cols={2}>
-  <Card title="Standalone JAR" icon="file-archive">
+  <Card title="Standalone JAR" icon="file-archive" href="/usage/cli">
     Download `vineflower.jar` from GitHub Releases and run with `java -jar`. No installation needed — the fat JAR is self-contained with all plugins included.
   </Card>
-  <Card title="Gradle / Maven" icon="box">
+  <Card title="Gradle / Maven" icon="box" href="/usage/library">
     Add `org.vineflower:vineflower:1.12.0` from Maven Central. Use the slim JAR artifact for library integration; add plugin artifacts separately as needed.
   </Card>
-  <Card title="Build from Source" icon="hammer">
+  <Card title="Build from Source" icon="hammer" href="/guides/integrating">
     Clone the repo and run `./gradlew build`. Produces both the fat JAR and the slim JAR in `build/libs/`.
   </Card>
-  <Card title="IDE Plugin" icon="lightbulb">
-    For IntelliJ IDEA users, the [Vineflower IntelliJ plugin](https://plugins.jetbrains.com/plugin/18032-quiltflower) replaces the built-in Fernflower decompiler with Vineflower automatically.
+  <Card title="IDE Plugin" icon="lightbulb" href="https://plugins.jetbrains.com/plugin/18032-quiltflower">
+    For IntelliJ IDEA users, the Vineflower IntelliJ plugin replaces the built-in Fernflower decompiler with Vineflower automatically.
   </Card>
 </CardGroup>

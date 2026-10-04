@@ -1,5 +1,5 @@
 ---
-title: "Vineflower CLI: Commands, Flags, and Examples"
+title: "Vineflower CLI: Commands, Flags, and Usage Examples"
 sidebarTitle: "CLI"
 description: "Run Vineflower from the command line to decompile JARs, ZIPs, folders, and class files with fine-grained options, config files, and classpath libraries."
 ---
@@ -33,7 +33,7 @@ These flags are positional and do not use the `--option=value` syntax.
 
 | Flag | Description |
 |---|---|
-| `-h`, `--help` | Print the full help screen and exit. |
+| `-h`, `-help`, `--help` | Print the full help screen and exit. |
 | `-s`, `--silent` | Suppress all output except errors (sets `log-level` to `error`). |
 | `--list-plugins` | Print information about all loaded plugins and exit. |
 | `-cfg <file>` or `-cfg=<file>` | Read additional arguments from a text file, one argument per line. |
@@ -42,7 +42,6 @@ These flags are positional and do not use the `--option=value` syntax.
 | `--file` | Force output to a single archive file. |
 | `--folder` | Force output to a directory tree. |
 | `--legacy-saving` | Use the legacy `ConsoleDecompiler`-style save path (mirrors the old Fernflower behaviour). |
-| `--method-to-decompile=<ref>` | Decompile a single method. Format: `owner.nameDescriptor` (e.g. `foo/Bar.baz()V`) or just `nameDescriptor` when decompiling a single class. |
 
 ### Option Syntax
 
@@ -176,3 +175,4 @@ The table below covers the options most frequently used at the command line. For
 | `--indent-string` | `-ind` | STRING | 3 spaces | Characters used for each indentation level. |
 | `--skip-extra-files` | `-sef` | BOOLEAN | `false` | Do not copy non-class resources to the output. |
 | `--dump-bytecode-on-error` | `-dbe` | BOOLEAN | `true` | Embed raw bytecode in the output on decompilation failure. |
+| `--method-to-decompile` | — | STRING | `""` | Decompile only this method. Format: `owner.nameDescriptor` (e.g. `com/example/Foo.bar()V`). The owner prefix may be omitted when decompiling a single class. |

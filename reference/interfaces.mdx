@@ -1,7 +1,7 @@
 ---
-title: "Vineflower Extension Interfaces Reference"
+title: "Vineflower Extension Interfaces: IResultSaver and More"
 sidebarTitle: "Interfaces"
-description: "Reference for every public extension interface in Vineflower: IResultSaver, IFernflowerLogger, IContextSource, IIdentifierRenamer, IVariableNamingFactory, TextTokenVisitor, and more."
+description: "Reference for public extension interfaces in Vineflower: IResultSaver, IFernflowerLogger, IContextSource, IIdentifierRenamer, and TextTokenVisitor."
 ---
 
 Vineflower exposes a set of public interfaces — primarily in `org.jetbrains.java.decompiler.main.extern` and `org.jetbrains.java.decompiler.api` — that let you control inputs, outputs, logging, identifier renaming, variable naming, and token inspection without touching internal classes. Implement the interface(s) relevant to your use case and wire them into `Decompiler.builder()` or a `Plugin`.
@@ -393,7 +393,14 @@ package org.jetbrains.java.decompiler.main.extern;
 
 public abstract class TextTokenVisitor {
 
-  public static final TextTokenVisitor EMPTY = /* terminal no-op */;
+  /** Terminal no-op singleton; used as the tail of every visitor chain. */
+  public static final TextTokenVisitor EMPTY = /* package-private no-arg ctor */;
+
+  /**
+   * Construct a visitor that delegates to `next` after running its own logic.
+   * Pass `EMPTY` as the tail of your chain.
+   */
+  public TextTokenVisitor(TextTokenVisitor next) { ... }
 
   // --- Visitor lifecycle ---
 

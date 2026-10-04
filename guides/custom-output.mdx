@@ -1,5 +1,5 @@
 ---
-title: "Custom Output Handling with IResultSaver"
+title: "Implementing a Custom IResultSaver for Vineflower Output"
 sidebarTitle: "Custom Output"
 description: "Implement IResultSaver to route Vineflower's decompiled output anywhere — memory maps, custom archives, databases, or streaming endpoints."
 ---
@@ -269,7 +269,7 @@ public class ZipResultSaver implements IResultSaver {
 
 For use cases that need richer access than raw source text — syntax highlighting, AST-style analysis, or mapping generation — Vineflower can emit a stream of typed text tokens when `dump-text-tokens` is enabled. Set it via the builder option `IFernflowerPreferences.DUMP_TEXT_TOKENS`.
 
-When this option is active, the decompiler generates a parallel `.tokens` file (or calls an additional output hook in the context of custom savers) containing each token's type, position, and text. This is particularly useful for tooling that needs to correlate source ranges back to specific language constructs without re-parsing the emitted Java.
+When this option is active, the decompiler appends a `/* Tokens: ... */` comment block at the end of each class's decompiled Java source. The comment lists each token's type (class, field, method, parameter, local), its character-range positions within the source, and whether it is a declaration or a reference. This is particularly useful for tooling that needs to correlate source ranges back to specific language constructs without re-parsing the emitted Java.
 
 ## Bytecode-to-Source Line Mapping
 

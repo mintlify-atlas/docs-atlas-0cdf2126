@@ -1,5 +1,5 @@
 ---
-title: "Vineflower Plugin System Overview"
+title: "Vineflower Plugin System: Architecture and Overview"
 sidebarTitle: "Overview"
 description: "Extend Vineflower with custom passes, JVM language support, variable renaming, and extra options via the Plugin interface and Java ServiceLoader discovery."
 ---
@@ -102,7 +102,7 @@ When a class is routed to the Java pipeline, each registered `Pass` fires at the
 
 ## Bundled plugins
 
-The following four plugins are bundled in the `vineflower.jar` fat JAR and are auto-discovered at startup. The Scala plugin is present in the source tree but is **not** wired into the main Gradle build by default.
+The following three plugins are bundled in the `vineflower.jar` fat JAR and are auto-discovered at startup. A fourth plugin, Scala, is present in the source tree but is **not** wired into the main Gradle build by default and is not included in the fat JAR.
 
 <CardGroup cols={2}>
   <Card title="Kotlin" icon="k" href="/plugins/bundled-plugins#kotlin">

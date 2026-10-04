@@ -1,5 +1,5 @@
 ---
-title: "Vineflower Version History and Changelog"
+title: "Vineflower Version History, Changelog, and Compatibility"
 sidebarTitle: "Changelog"
 description: "Version history, Java compatibility requirements, project heritage, and major milestones for the Vineflower decompiler from its Fernflower roots to today."
 ---
@@ -90,22 +90,22 @@ Vineflower did not start from scratch. Its codebase descends through a chain of 
 The following table summarises the categories of significant capabilities introduced across Vineflower's development. Exact version numbers for each feature are listed in the [GitHub Release notes](https://github.com/Vineflower/vineflower/releases).
 
 <CardGroup cols={2}>
-  <Card title="Modern Java language support" icon="java">
+  <Card title="Modern Java language support" icon="java" href="/usage/options">
     Records, sealed classes, switch expressions and statements, pattern matching, text blocks, enhanced `instanceof`, and features targeting Java 21+.
   </Card>
-  <Card title="Multithreaded decompilation" icon="bolt">
+  <Card title="Multithreaded decompilation" icon="bolt" href="/usage/options">
     Parallel per-class decompilation reduces wall-clock time significantly on multi-core hardware, controlled via the `threads` option.
   </Card>
-  <Card title="Plugin API" icon="plug">
+  <Card title="Plugin API" icon="plug" href="/plugins/overview">
     The `org.jetbrains.java.decompiler.api.plugin` package lets external JARs register decompilation passes at well-defined `JavaPassLocation` and `ClassPassLocation` hook points, and supply custom `LanguageSpec` implementations for non-Java JVM languages.
   </Card>
-  <Card title="JVM language plugins" icon="code">
+  <Card title="JVM language plugins" icon="code" href="/plugins/bundled-plugins">
     Kotlin and Scala decompilation plugins (under `plugins/`) are bundled into the all-in-one JAR, demonstrating the `LanguageSpec` and `LanguageChooser` APIs for language-specific output.
   </Card>
-  <Card title="IContextSource API" icon="database">
+  <Card title="IContextSource API" icon="database" href="/reference/interfaces">
     Replaced the deprecated `IBytecodeProvider` with a richer context model supporting multi-release JARs, lazy library loading, custom output sinks, and child-context discovery.
   </Card>
-  <Card title="Improved output quality" icon="sparkles">
+  <Card title="Improved output quality" icon="sparkles" href="/reference/architecture">
     Ongoing improvements to the SSA/SSAU simplification passes, loop restructuring (`MergeHelper`), try-with-resources detection, and variable-definition placement, resulting in cleaner and more idiomatic decompiled output.
   </Card>
 </CardGroup>

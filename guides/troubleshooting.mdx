@@ -8,6 +8,8 @@ Vineflower is designed to produce high-quality output in the vast majority of ca
 
 ## Common Problems
 
+The entries below cover the most frequently encountered issues. Expand any entry to see its cause and recommended fix.
+
 <Accordion title="Decompilation produces // $FF: couldn't be decompiled">
 
 **Cause:** Vineflower's control-flow graph (CFG) analysis failed to reduce the method into a structured statement tree. This happens when the bytecode contains irreducible control flow, malformed exception ranges, or constructs that the current statement parser cannot handle. The comment is Vineflower's way of marking the method rather than silently omitting it.

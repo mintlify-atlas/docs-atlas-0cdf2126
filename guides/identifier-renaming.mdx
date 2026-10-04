@@ -87,7 +87,7 @@ Decompiler decompiler = Decompiler.builder()
 ### Parse the ProGuard mapping file
 
 A ProGuard mapping file has the format:
-```
+```text
 original.ClassName -> obfuscated.Name:
     originalField -> a
     returnType originalMethod(args) -> b
@@ -248,14 +248,6 @@ Both strategies also rename method parameters when `rename-parameters=1` is set:
 
 ```bash
 java -jar vineflower.jar --variable-renaming=jad --rename-parameters=1 obfuscated.jar output/
-```
-
-### Tiny mapping file support
-
-The `tiny` strategy can additionally consume a [Tiny v2 mapping file](https://wiki.fabricmc.net/documentation:tiny2) to apply known variable and parameter names rather than generating synthetic ones. Supply the mapping file via the plugin option:
-
-```bash
-java -jar vineflower.jar --variable-renaming=tiny --tiny-file=mappings.tiny obfuscated.jar output/
 ```
 
 ## LVT and MethodParameters Attribute Names

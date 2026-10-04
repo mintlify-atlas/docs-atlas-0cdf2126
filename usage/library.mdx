@@ -1,7 +1,7 @@
 ---
-title: "Embedding Vineflower as a Java Library"
+title: "Using Vineflower as a Java Library: Programmatic API"
 sidebarTitle: "Library API"
-description: "Add Vineflower as a Gradle or Maven dependency and drive decompilation programmatically via the fluent Decompiler.builder() API or the lower-level Fernflower engine."
+description: "Use Vineflower as a Java library: add the Maven/Gradle dependency, call Decompiler.builder(), implement IResultSaver, and route logs via IFernflowerLogger."
 ---
 
 Vineflower is published to Maven Central as `org.vineflower:vineflower` and can be embedded directly into any JVM application. The library exposes two API layers: a modern fluent builder (`Decompiler.builder()`) introduced to simplify common use-cases, and the lower-level `Fernflower` / `BaseDecompiler` classes that have been present since the original Fernflower codebase. Both layers accept the same option keys, classpath inputs, and output sink interfaces, so you can start with the builder and drop down to the engine if you need finer control.
@@ -353,10 +353,16 @@ public class SLF4JLogger extends IFernflowerLogger {
 The logger also exposes optional lifecycle hooks you can override to track progress:
 
 ```java Progress tracking hooks
-@Override public void startReadingClass(String className)  { /* class about to be decompiled */ }
-@Override public void endReadingClass()                    { /* class decompilation finished  */ }
-@Override public void startMethod(String methodName)       { /* method about to be processed */ }
-@Override public void endMethod()                          { /* method processing finished   */ }
+@Override public void startProcessingClass(String className) { /* class preprocessing started  */ }
+@Override public void endProcessingClass()                   { /* class preprocessing finished */ }
+@Override public void startReadingClass(String className)    { /* class decompilation started  */ }
+@Override public void endReadingClass()                      { /* class decompilation finished */ }
+@Override public void startClass(String className)           { /* class processing started     */ }
+@Override public void endClass()                             { /* class processing finished    */ }
+@Override public void startMethod(String methodName)         { /* method about to be processed */ }
+@Override public void endMethod()                            { /* method processing finished   */ }
+@Override public void startWriteClass(String className)      { /* class write started          */ }
+@Override public void endWriteClass()                        { /* class write finished         */ }
 ```
 
 ---

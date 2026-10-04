@@ -1,5 +1,5 @@
 ---
-title: "Writing a Vineflower Plugin from Scratch"
+title: "Writing a Vineflower Plugin: From Scratch to Packaging"
 sidebarTitle: "Writing Plugins"
 description: "Step-by-step guide to implementing the Plugin interface, registering passes, exposing options, and packaging your plugin for use with Vineflower."
 ---
@@ -267,7 +267,7 @@ Pass composite = new MainPassBuilder()
     .build();
 ```
 
-`LoopingPassBuilder` creates a loop — passes run repeatedly until a looping-flagged pass returns `false` for a full iteration:
+`LoopingPassBuilder` creates a loop — passes run repeatedly, restarting from the beginning whenever a looping-flagged pass returns `true`, and stopping when a complete iteration passes with no looping-flagged pass returning `true`:
 
 ```java MyPlugin.java
 import org.jetbrains.java.decompiler.api.plugin.pass.LoopingPassBuilder;
