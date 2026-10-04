@@ -1,47 +1,217 @@
 ---
-title: "Quickstart"
-description: "Begin with a guide on the fastest path to a successful outcome"
+title: "Get Started with Vineflower in 5 Minutes"
+sidebarTitle: "Quickstart"
+description: "Decompile a JAR from the command line or integrate Vineflower as a Java library using the fluent Decompiler.builder() API — up and running in minutes."
 ---
 
-Describe how someone begins using your product. What is the first thing they need to do? Are there any prerequisites?
-
-A quickstart should take someone from zero to using your product. They'll get a quick win and a sense of what they can accomplish.
+Vineflower offers two ways to get started: a standalone command-line tool for one-off decompilation tasks, and a Java library API for integrating decompilation into your own application or build tooling. Both paths require Java 17 or higher for Vineflower 1.11+ (Java 11 for 1.9.x/1.10.x). This guide walks you through both approaches so you can choose the one that fits your workflow.
 
 ## Prerequisites
 
-Before you begin, you must have:
+Before you begin, confirm that a supported JDK is available on your `PATH`:
 
-- Requirement one (for example, Node.js 18+, a free account, an API key)
-- Requirement two (for example, a compatible device, a compatible browser, a compatible operating system)
+```bash
+java -version
+# Should report 17.x or higher for Vineflower 1.12.x
+```
 
-## Get started
+## Path 1 — CLI Quickstart
 
 <Steps>
-  <Step title="Install">
-    Describe how to install your product or sign up.
-
-    ```bash
-    npm install your-package
-    ```
+  <Step title="Download the JAR">
+    Grab the latest `vineflower.jar` from the [GitHub Releases page](https://github.com/Vineflower/vineflower/releases). The file named `vineflower.jar` (without a `-slim` suffix) is the fat JAR that bundles all plugins and is ready to run immediately.
   </Step>
-  <Step title="Configure">
-    Describe any setup or configuration needed before first use.
+  <Step title="Run the decompiler">
+    Point Vineflower at a source (JAR, ZIP, folder, or single `.class` file) and provide a destination directory:
 
     ```bash
-    your-cli init
+    java -jar vineflower.jar MyApp.jar ./output/
     ```
+
+    Vineflower will create the destination directory if it does not exist and write one `.java` file per class.
   </Step>
-  <Step title="Run it">
-    Show the first thing a user does to see it working.
+  <Step title="Inspect the output">
+    Browse the decompiled sources in `./output/`:
 
     ```bash
-    your-cli start
+    ls ./output/
+    # com/example/MyApp.java
+    # com/example/util/Helper.java
+    # ...
+    ```
+
+    <Tip>
+      Omit the destination argument entirely to print decompiled source directly to the console — handy for quickly inspecting a single class file.
+    </Tip>
+  </Step>
+  <Step title="Explore options (optional)">
+    Vineflower exposes many fine-grained options. Print the full option reference with:
+
+    ```bash
+    java -jar vineflower.jar --help
+    ```
+
+    Options are passed as `--option-name=value` flags before the source argument:
+
+    ```bash
+    java -jar vineflower.jar --decompile-generics=1 MyApp.jar ./output/
     ```
   </Step>
 </Steps>
 
-<Tip>
-  Give people a way to get help. This could be a link to a support page, a chat with a customer support agent, or a forum for your product.
+### Supported source and destination types
 
-  Example: Need help? Reach out to us at [support@yourcompany.com](mailto:support@yourcompany.com).
+| Source | Destination |
+|---|---|
+| `.jar` file | Directory (one `.java` per class) |
+| `.zip` file | `.jar` or `.zip` file |
+| Directory of `.class` files | Directory |
+| Single `.class` file | *(omit for console output)* |
+
+<Note>
+  You can pass multiple source paths before the single destination path. Use `--add-external=<path>` (or `-e=<path>`) to supply library JARs that Vineflower should use for type resolution without decompiling.
+</Note>
+
+---
+
+## Path 2 — Library Quickstart
+
+Embed Vineflower directly into a Java project using the `Decompiler.builder()` fluent API.
+
+### Add the dependency
+
+<Tabs>
+  <Tab title="Gradle (Groovy)">
+    ```groovy build.gradle
+    dependencies {
+        implementation 'org.vineflower:vineflower:1.12.0'
+    }
+    ```
+  </Tab>
+  <Tab title="Gradle (Kotlin)">
+    ```kotlin build.gradle.kts
+    dependencies {
+        implementation("org.vineflower:vineflower:1.12.0")
+    }
+    ```
+  </Tab>
+  <Tab title="Maven">
+    ```xml pom.xml
+    <dependency>
+        <groupId>org.vineflower</groupId>
+        <artifactId>vineflower</artifactId>
+        <version>1.12.0</version>
+    </dependency>
+    ```
+  </Tab>
+</Tabs>
+
+### Write your first decompilation snippet
+
+The `Decompiler` class (in `org.jetbrains.java.decompiler.api`) provides the public entry point. You must supply at least one input and an `IResultSaver` that decides where the decompiled output goes.
+
+```java DecompileExample.java
+import org.jetbrains.java.decompiler.api.Decompiler;
+import org.jetbrains.java.decompiler.main.decompiler.DirectoryResultSaver;
+
+import java.io.File;
+
+public class DecompileExample {
+    public static void main(String[] args) {
+        File input  = new File("MyApp.jar");
+        File output = new File("./output");
+        output.mkdirs();
+
+        Decompiler decompiler = Decompiler.builder()
+            .inputs(input)
+            .output(new DirectoryResultSaver(output))
+            .build();
+
+        decompiler.decompile();
+    }
+}
+```
+
+<Tip>
+  `Decompiler.builder()` returns a `Builder` that is fully immutable and thread-safe to configure. Calling `.build()` constructs the underlying Fernflower engine and validates that you have provided at least one input and an output saver.
 </Tip>
+
+### Builder API reference
+
+The `Decompiler.Builder` supports the following chaining methods:
+
+| Method | Description |
+|---|---|
+| `.inputs(File... files)` | Add source JARs, ZIPs, directories, or `.class` files to decompile |
+| `.inputs(IContextSource... sources)` | Add a custom context source (advanced) |
+| `.output(IResultSaver saver)` | **Required.** Set the result saver that handles writing decompiled output |
+| `.libraries(File... files)` | Add library JARs used for type resolution (not decompiled) |
+| `.libraries(IContextSource... sources)` | Add a custom library context source |
+| `.logger(IFernflowerLogger logger)` | Attach a custom logger; defaults to `IFernflowerLogger.NO_OP` |
+| `.option(String key, Object value)` | Set a single decompiler option |
+| `.options(Object... keyValuePairs)` | Set multiple options at once as alternating key/value pairs |
+| `.allowedPrefixes(String... prefixes)` | Restrict decompilation to classes matching these package prefixes |
+
+### Setting decompiler options programmatically
+
+Option keys are constants defined in `IFernflowerPreferences`. Pass them using `.option()`:
+
+```java OptionsExample.java
+import org.jetbrains.java.decompiler.api.Decompiler;
+import org.jetbrains.java.decompiler.main.decompiler.DirectoryResultSaver;
+import org.jetbrains.java.decompiler.main.extern.IFernflowerPreferences;
+
+import java.io.File;
+
+public class OptionsExample {
+    public static void main(String[] args) {
+        Decompiler decompiler = Decompiler.builder()
+            .inputs(new File("MyApp.jar"))
+            .output(new DirectoryResultSaver(new File("./output")))
+            .option(IFernflowerPreferences.DECOMPILE_GENERIC_SIGNATURES, "1")
+            .option(IFernflowerPreferences.REMOVE_SYNTHETIC, "1")
+            .build();
+
+        decompiler.decompile();
+    }
+}
+```
+
+<Note>
+  The builder automatically normalises boolean convenience values: passing `true` is converted to `"1"` and `false` to `"0"` so you can use either form.
+</Note>
+
+---
+
+## What the output looks like
+
+A well-decompiled class from Vineflower produces clean, formatted Java source with proper generic signatures, annotations, and modern language constructs preserved:
+
+```java DecompiledOutput.java
+// Decompiled by Vineflower
+
+package com.example;
+
+public record Point(double x, double y) {
+    public double distanceTo(Point other) {
+        double dx = this.x - other.x;
+        double dy = this.y - other.y;
+        return Math.sqrt(dx * dx + dy * dy);
+    }
+}
+```
+
+<Tip>
+  Compare Vineflower's output against other decompilers on the [official output comparison page](https://vineflower.org/output-comparison/).
+</Tip>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Installation" icon="download" href="/installation">
+    Full details on every installation method, JAR variants, and building from source.
+  </Card>
+  <Card title="Introduction" icon="book" href="/introduction">
+    Learn about Vineflower's architecture, fork lineage, and feature set.
+  </Card>
+</CardGroup>

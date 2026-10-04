@@ -1,0 +1,256 @@
+---
+title: "Pass System: Injecting Custom Decompiler Passes"
+sidebarTitle: "Pass System"
+description: "Inject custom passes into Vineflower's pipeline using JavaPassRegistrar, eight JavaPassLocation slots, ClassPassLocation values, and pass builder helpers."
+---
+
+A _pass_ in Vineflower is a focused transformation applied to a method's intermediate representation (IR) at a specific stage of decompilation. Passes are the primary way plugins influence how bytecode is turned into source code — from cleaning up obfuscated control flow to inserting language-specific resugaring. This page explains what passes are, the data they work with, where in the pipeline they run, and how to register them.
+
+## Pass vs ClassPass
+
+Vineflower has two pass types that operate at different granularities.
+
+<Tabs>
+  <Tab title="Pass (method-level)">
+    `Pass` is a `@FunctionalInterface` that receives a `PassContext` representing a single method's IR and returns a `boolean` indicating whether it modified anything.
+
+    ```java Pass.java
+    @FunctionalInterface
+    public interface Pass {
+      Pass NO_OP = ctx -> false;
+
+      /**
+       * @return true if the IR was modified, false otherwise
+       */
+      boolean run(PassContext ctx);
+    }
+    ```
+
+    Returning `true` at a _looping_ location (see below) causes the enclosing loop to restart from the beginning, allowing iterative refinement. At non-looping locations the return value has no effect on control flow.
+  </Tab>
+  <Tab title="ClassPass (class-level)">
+    `ClassPass` receives a `ClassesProcessor.ClassNode` — the root node of an entire class hierarchy — rather than a single method. It is used for transformations that need to see nested classes, process fields, or run before or after all methods in a class have been handled.
+
+    ```java ClassPass.java
+    public interface ClassPass {
+      boolean run(ClassesProcessor.ClassNode root);
+    }
+    ```
+
+    Class passes are registered with `JavaPassRegistrar.registerClassPass(ClassPassLocation, ClassPass)`.
+  </Tab>
+</Tabs>
+
+## PassContext fields
+
+`PassContext` is the read/write bag of state passed to every method-level `Pass`. Understanding its fields is essential for writing useful passes.
+
+<AccordionGroup>
+  <Accordion title="RootStatement getRoot() / void setRoot(RootStatement)">
+    The top-level structured statement graph for the method. All statements (`IfStatement`, `DoStatement`, `CatchStatement`, `SequenceStatement`, `BasicBlockStatement`, etc.) hang beneath this root. Most passes read and mutate this tree. You may replace the entire root by calling `setRoot()` if your pass rebuilds the graph from scratch.
+  </Accordion>
+  <Accordion title="ControlFlowGraph getGraph()">
+    The raw control-flow graph of basic blocks, available at locations that run before or during CFG-to-statement conversion (`CFG_CONSTRUCTION`, `CFG_PRE_STATEMENT`). At later locations the graph still exists but the structured statement tree is the canonical representation.
+  </Accordion>
+  <Accordion title="StructMethod getMethod()">
+    Metadata about the method being decompiled: name, descriptor string, access flags, bytecode version, and attributes. Use this to check whether the method is static, abstract, synthetic, etc.
+  </Accordion>
+  <Accordion title="StructClass getEnclosingClass()">
+    Metadata about the class that contains the method: qualified name, superclass, interfaces, fields, methods, and arbitrary class-file attributes. Useful when your pass needs context about the class hierarchy.
+  </Accordion>
+  <Accordion title="VarProcessor getVarProc()">
+    The variable processor that tracks variable versions (SSA/SSAU state), variable definitions, and type assignments. Use this to query variable names and types or to drive `setVarVersions()` / `setVarDefinitions()` if you restructure the IR.
+  </Accordion>
+  <Accordion title="DecompileRecord getRec()">
+    An append-only log of which passes have run and what they changed. `NamedPass` automatically appends an entry to this record when it returns `true`, enabling diagnostic output and reproducibility analysis.
+  </Accordion>
+  <Accordion title="MethodDescriptor getMethodDescriptor()">
+    A parsed representation of the method's descriptor (parameter types and return type as `VarType` instances). Saves you from parsing the raw descriptor string yourself.
+  </Accordion>
+</AccordionGroup>
+
+## JavaPassLocation — the eight method-level locations
+
+`JavaPassLocation` is an enum with eight values that map to precise moments in method decompilation. Two of them are _looping_ locations: returning `true` from a pass at those points restarts the enclosing refinement loop.
+
+```java JavaPassLocation.java
+public enum JavaPassLocation {
+  CFG_CONSTRUCTION(false),
+  CFG_PRE_STATEMENT(false),
+  BEFORE_MAIN(false),
+  IN_LOOP_DECOMP(true),
+  MAIN_LOOP(true),
+  AFTER_MAIN(false),
+  AT_END(false),
+  LATE_PROCESSING(false);
+}
+```
+
+<Note>
+  Locations marked `isLoop() == true` (`IN_LOOP_DECOMP` and `MAIN_LOOP`) will **restart the loop from the beginning** if any registered pass at that location returns `true`. Design looping passes carefully — an always-`true` pass causes an infinite loop.
+</Note>
+
+The table below describes each location in detail:
+
+| Location | Loop? | When it runs | Typical uses |
+|---|---|---|---|
+| `CFG_CONSTRUCTION` | No | After the CFG is built; no refinement has occurred | Inspect or patch raw basic blocks; remove dead code at the instruction level |
+| `CFG_PRE_STATEMENT` | No | Immediately before the CFG is converted into a structured statement | Final CFG transforms (exception range cleanup, block merging) before the graph is abandoned |
+| `BEFORE_MAIN` | No | After CFG-to-statement conversion, before the main resugaring loop | One-time statement-tree setup passes; language-specific pre-processing |
+| `IN_LOOP_DECOMP` | **Yes** | Inside the loop-statement resugaring loop | Custom loop detection and reshaping; looping passes that interact with `EliminateLoopsHelper` |
+| `MAIN_LOOP` | **Yes** | Inside the main loop, after labels have been resolved | Resugaring: identify ternaries, inline single blocks, simplify conditions, language-specific replacements |
+| `AFTER_MAIN` | No | After the main loop, before variable definitions are resolved | Final structural cleanup that does not require variable metadata |
+| `AT_END` | No | After variable definitions are resolved | Passes that need final variable names/types; annotation or comment injection |
+| `LATE_PROCESSING` | No | Right before the class is written to output | Last-chance transformations; cross-method aggregation before writing |
+
+## ClassPassLocation — the three class-level locations
+
+`ClassPassLocation` controls when a `ClassPass` fires relative to a class's decompilation lifecycle:
+
+```java ClassPassLocation.java
+public enum ClassPassLocation {
+  BEFORE_PROCESSING,
+  AFTER_PROCESSING,
+  BEFORE_WRITING
+}
+```
+
+| Location | When it runs |
+|---|---|
+| `BEFORE_PROCESSING` | Before any method in the class is decompiled |
+| `AFTER_PROCESSING` | After all methods in the class have been decompiled |
+| `BEFORE_WRITING` | After processing, just before the class is serialised to source text |
+
+## Registering passes
+
+Inside `Plugin.registerJavaPasses(JavaPassRegistrar)`, call `register()` for method-level passes and `registerClassPass()` for class-level passes:
+
+```java MyPlugin.java
+import org.jetbrains.java.decompiler.api.java.ClassPassLocation;
+import org.jetbrains.java.decompiler.api.java.JavaPassLocation;
+import org.jetbrains.java.decompiler.api.java.JavaPassRegistrar;
+import org.jetbrains.java.decompiler.api.plugin.pass.NamedPass;
+
+@Override
+public void registerJavaPasses(JavaPassRegistrar registrar) {
+    // Method-level pass at the MAIN_LOOP looping location
+    registrar.register(
+        JavaPassLocation.MAIN_LOOP,
+        new NamedPass("MyMethodPass", ctx -> {
+            return transformMethod(ctx.getRoot());
+        })
+    );
+
+    // Class-level pass after all methods have been decompiled
+    registrar.registerClassPass(
+        ClassPassLocation.AFTER_PROCESSING,
+        root -> {
+            processClassNode(root);
+            return true;
+        }
+    );
+}
+```
+
+## NamedPass and WrappedPass
+
+Two helper wrappers reduce boilerplate for the most common pass patterns.
+
+<Tabs>
+  <Tab title="NamedPass">
+    Wraps any `Pass` with a string name. When the inner pass returns `true`, `NamedPass` automatically appends an entry to the method's `DecompileRecord`, making the transformation visible in diagnostic output.
+
+    ```java
+    import org.jetbrains.java.decompiler.api.plugin.pass.NamedPass;
+
+    NamedPass named = new NamedPass("MyTransform", ctx -> doTransform(ctx.getRoot()));
+    // or
+    NamedPass named = NamedPass.of("MyTransform", ctx -> doTransform(ctx.getRoot()));
+    ```
+  </Tab>
+  <Tab title="WrappedPass">
+    Adapts a `Consumer<PassContext>` (a void lambda) into a `Pass` that always returns `true`. Use this when your transformation is unconditional and you always want to signal that the IR was touched.
+
+    ```java
+    import org.jetbrains.java.decompiler.api.plugin.pass.WrappedPass;
+
+    Pass wrapped = WrappedPass.of(ctx -> SequenceHelper.condenseSequences(ctx.getRoot()));
+    ```
+  </Tab>
+</Tabs>
+
+## Building composite passes
+
+### MainPassBuilder
+
+`MainPassBuilder` chains multiple named passes into a single sequential composite. All child passes run in order; the composite returns `true` if any child returned `true`.
+
+```java
+import org.jetbrains.java.decompiler.api.plugin.pass.MainPassBuilder;
+import org.jetbrains.java.decompiler.api.plugin.pass.WrappedPass;
+
+Pass myPass = new MainPassBuilder()
+    .addPass("Normalize",   ctx -> normalize(ctx.getRoot()))
+    .addPass("Collapse",    WrappedPass.of(ctx -> collapse(ctx.getRoot())))
+    .addPass("AnnotateVars", ctx -> annotate(ctx))
+    .build();
+```
+
+### LoopingPassBuilder
+
+`LoopingPassBuilder` builds a pass that runs its children in a loop, restarting whenever a child marked as _looping_ returns `true`. Passes marked as _fallthrough_ always advance to the next pass regardless of their return value.
+
+```java
+import org.jetbrains.java.decompiler.api.plugin.pass.LoopingPassBuilder;
+
+Pass loop = new LoopingPassBuilder("Refinement")
+    .addLoopingPass("Simplify",  ctx -> simplify(ctx.getRoot()))
+    .addLoopingPass("Inline",    ctx -> inline(ctx.getRoot()))
+    .addFallthroughPass("Clean", WrappedPass.of(ctx -> cleanup(ctx.getRoot())))
+    .build();
+```
+
+<Note>
+  The outer `LoopingPassBuilder` loop restarts if a looping-flagged inner pass returns `true`. Fallthrough passes always continue to the next step regardless of return value and do not reset the loop.
+</Note>
+
+## Full example: logging pass
+
+The following is a complete plugin that registers a pass at `AT_END` to log each processed method's fully-qualified name.
+
+```java LoggingPlugin.java
+package com.example.logging;
+
+import org.jetbrains.java.decompiler.api.java.JavaPassLocation;
+import org.jetbrains.java.decompiler.api.java.JavaPassRegistrar;
+import org.jetbrains.java.decompiler.api.plugin.Plugin;
+import org.jetbrains.java.decompiler.api.plugin.pass.NamedPass;
+
+public class LoggingPlugin implements Plugin {
+
+    @Override
+    public String id() {
+        return "MethodLogger";
+    }
+
+    @Override
+    public String description() {
+        return "Logs the name of every method processed by Vineflower.";
+    }
+
+    @Override
+    public void registerJavaPasses(JavaPassRegistrar registrar) {
+        registrar.register(
+            JavaPassLocation.AT_END,
+            new NamedPass("LogMethod", ctx -> {
+                String className  = ctx.getEnclosingClass().qualifiedName;
+                String methodName = ctx.getMethod().getName();
+                String descriptor = ctx.getMethodDescriptor().toString();
+                System.out.printf("[MethodLogger] %s.%s%s%n",
+                    className, methodName, descriptor);
+                return false; // no IR modifications
+            })
+        );
+    }
+}
+```

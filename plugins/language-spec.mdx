@@ -1,0 +1,251 @@
+---
+title: "Adding a New JVM Language with LanguageSpec"
+sidebarTitle: "Language Spec"
+description: "Use LanguageSpec to teach Vineflower how to detect, parse, and write source for a non-Java JVM language, with the Kotlin plugin as a real-world reference."
+---
+
+`LanguageSpec` is Vineflower's answer to languages that compile to JVM bytecode but whose source representation is fundamentally different from Java. Instead of bolting language-specific logic onto the Java pipeline through passes, a `LanguageSpec` replaces the entire per-class decompilation stack: class detection, CFG-to-statement parsing, and source writing all become language-owned. The Kotlin plugin — shipping in the main Vineflower repository — is the canonical real-world example of a `LanguageSpec` in action.
+
+## When to use LanguageSpec
+
+Use `LanguageSpec` when you need a **completely different output format** — different keywords, different file structure, different type notation — for classes that belong to a specific JVM language. If you only need to tweak how certain Java constructs are rendered (for example, removing IDEA `@NotNull` boilerplate), a few `Pass` registrations via `registerJavaPasses()` are sufficient and far simpler.
+
+<Tip>
+  A good rule of thumb: if your target language would produce a `.kt`, `.scala`, or `.groovy` file instead of a `.java` file, reach for `LanguageSpec`. If you are still emitting `.java` with minor adjustments, use passes.
+</Tip>
+
+## The LanguageSpec constructor
+
+`LanguageSpec` is a plain final class with an all-arguments constructor. All fields are public and final — there is no builder:
+
+```java LanguageSpec.java
+public final class LanguageSpec {
+  public final String name;
+  public final LanguageChooser chooser;
+  public final GraphParser graphParser;
+  public final StatementWriter writer;
+  public final Pass pass;
+  public final Pass cfgPass;
+  public final ClassPass rootProcessor;
+  public final String extension;
+
+  public LanguageSpec(
+      String name,
+      LanguageChooser chooser,
+      GraphParser graphParser,
+      StatementWriter writer,
+      Pass pass,
+      Pass cfgPass,
+      ClassPass rootProcessor,
+      String extension) { ... }
+}
+```
+
+The Kotlin plugin constructs its `LanguageSpec` as:
+
+```java KotlinPlugin.java
+@Override
+public LanguageSpec getLanguageSpec() {
+    return new LanguageSpec(
+        "kotlin",           // name
+        new KotlinChooser(),// chooser
+        new DomHelper(),    // graphParser (reuses Vineflower's Java parser)
+        new KotlinWriter(), // writer
+        makePass(),         // pass (method-level IR pipeline)
+        makeCfgPass(),      // cfgPass (CFG-level transforms)
+        getRootProcessor(), // rootProcessor (class-level post-processing)
+        "kt"                // extension
+    );
+}
+```
+
+## LanguageSpec components in detail
+
+### name
+
+A lowercase string identifier for the language (e.g. `"kotlin"`, `"scala"`). Used in log messages and diagnostics.
+
+---
+
+### LanguageChooser
+
+Determines whether a given `StructClass` belongs to this language. Vineflower calls `isLanguage(StructClass)` on every class before routing it to a pipeline.
+
+```java LanguageChooser.java
+public interface LanguageChooser {
+  boolean isLanguage(StructClass cl);
+}
+```
+
+The Kotlin chooser inspects the class for a `kotlin/Metadata` annotation. If found, it parses the Kotlin protobuf metadata and stores it as a class attribute before returning `true`:
+
+```java KotlinChooser.java
+@Override
+public boolean isLanguage(StructClass cl) {
+    boolean decompEnabled = DecompilerContext.getOption(KotlinOptions.DECOMPILE_KOTLIN);
+    if (!decompEnabled && !DecompilerContext.getOption(KotlinOptions.ALWAYS_EXPORT_METADATA)) {
+        return false;
+    }
+
+    for (Key<?> key : ANNOTATION_ATTRIBUTES) {
+        if (cl.hasAttribute(key)) {
+            StructAnnotationAttribute attr = cl.getAttribute((Key<StructAnnotationAttribute>) key);
+            for (AnnotationExprent anno : attr.getAnnotations()) {
+                if (anno.getClassName().equals("kotlin/Metadata")) {
+                    parseMetadataFor(cl);
+                    return decompEnabled;
+                }
+            }
+        }
+    }
+    return false;
+}
+```
+
+---
+
+### GraphParser
+
+Converts a `ControlFlowGraph` into a `RootStatement`. This replaces Vineflower's default `DomHelper`-based dominance analysis with whatever algorithm suits your language.
+
+```java GraphParser.java
+public interface GraphParser {
+  RootStatement createStatement(ControlFlowGraph graph, StructMethod mt);
+}
+```
+
+The Kotlin plugin reuses Vineflower's own `DomHelper` here because Kotlin bytecode has the same control-flow structure as Java bytecode. A language with radically different control flow (e.g. continuation-passing style) would supply its own implementation.
+
+---
+
+### StatementWriter
+
+The most involved component: writes the class header, fields, and methods to a `TextBuffer` that Vineflower then serialises to the output file.
+
+```java StatementWriter.java
+public interface StatementWriter {
+  void writeClassHeader(StructClass cl, TextBuffer buffer, ImportCollector importCollector);
+
+  void writeClass(ClassesProcessor.ClassNode node, TextBuffer buffer, int indent);
+
+  void writeField(ClassWrapper wrapper, StructClass cl, StructField fd,
+                  TextBuffer buffer, int indent);
+
+  boolean writeMethod(ClassesProcessor.ClassNode node, StructMethod mt,
+                      int methodIndex, TextBuffer buffer, int indent);
+
+  boolean endsWithSemicolon(Exprent expr);
+}
+```
+
+<Warning>
+  Implementing a full `StatementWriter` is a significant undertaking. It requires intimate knowledge of Vineflower's `Exprent` and `Statement` type hierarchies, the `ImportCollector`, and `TextBuffer` indentation conventions. Study `KotlinWriter` in the Kotlin plugin (`plugins/kotlin/src/main/java/org/vineflower/kotlin/KotlinWriter.java`) as a reference before writing your own.
+</Warning>
+
+---
+
+### pass (method-level IR pipeline)
+
+A `Pass` (or a composite built with `MainPassBuilder`/`LoopingPassBuilder`) that runs the method-level IR refinement pipeline for every method in a language-matched class. This replaces the default Java refinement loop for those classes.
+
+The Kotlin plugin builds an elaborate composite here: finally processing, expression parsing, stack-var simplification, a full main loop with loop resugaring, variable definitions, and Kotlin-specific replacements like `CollapseStringConcatPass` and `ReplaceExprentsPass`.
+
+---
+
+### cfgPass (CFG-level transforms)
+
+A `Pass` that runs on the raw `ControlFlowGraph` before it is converted to a statement tree. Use this for exception-range fixes, dead-block removal, or other graph-level cleanup.
+
+The Kotlin plugin's `cfgPass` applies `ExceptionDeobfuscator` and `DeadCodeHelper` transforms:
+
+```java KotlinPlugin.java
+private static Pass makeCfgPass() {
+    return new MainPassBuilder()
+        .addPass("RemoveCircular",
+            WrappedPass.of(ctx -> ExceptionDeobfuscator.removeCircularRanges(ctx.getGraph())))
+        .addPass("MergeBlocks",
+            WrappedPass.of(ctx -> DeadCodeHelper.mergeBasicBlocks(ctx.getGraph())))
+        // ...
+        .build();
+}
+```
+
+---
+
+### rootProcessor (ClassPass)
+
+A `ClassPass` that runs once per class after all methods have been processed. Typical uses include resolving nested class relationships or propagating synthetic member access. The Kotlin plugin uses it to run `NestedClassProcessor` and `NestedMemberAccess`:
+
+```java KotlinPlugin.java
+private static ClassPass getRootProcessor() {
+    return root -> {
+        new NestedClassProcessor().processClass(root, root);
+        new NestedMemberAccess().propagateMemberAccess(root);
+        return true;
+    };
+}
+```
+
+---
+
+### extension
+
+The file extension for generated source files, without a leading dot. Vineflower appends this to the class name when writing output. Examples: `"kt"` for Kotlin, `"scala"` for Scala, `"groovy"` for Groovy.
+
+## Hooking into the Plugin interface
+
+Return your `LanguageSpec` from `getLanguageSpec()` in your `Plugin` implementation. Vineflower queries this method once per decompiler instance and routes classes to your pipeline when `chooser.isLanguage()` returns `true`.
+
+```java MyLanguagePlugin.java
+import org.jetbrains.java.decompiler.api.plugin.Plugin;
+import org.jetbrains.java.decompiler.api.plugin.LanguageSpec;
+
+public class MyLanguagePlugin implements Plugin {
+
+    @Override
+    public String id() {
+        return "MyLanguage";
+    }
+
+    @Override
+    public String description() {
+        return "Decompiles MyLanguage class files back to .mylang source.";
+    }
+
+    @Override
+    public LanguageSpec getLanguageSpec() {
+        return new LanguageSpec(
+            "mylanguage",
+            cl -> MyLanguageDetector.isMyLanguage(cl),
+            (graph, mt) -> MyGraphParser.parse(graph, mt),
+            new MyStatementWriter(),
+            buildMethodPass(),
+            buildCfgPass(),
+            root -> { MyClassProcessor.process(root); return true; },
+            "mylang"
+        );
+    }
+
+    private static Pass buildMethodPass() {
+        return new MainPassBuilder()
+            .addPass("MyStep1", ctx -> MyStep1.run(ctx.getRoot()))
+            .addPass("MyStep2", WrappedPass.of(ctx -> MyStep2.run(ctx.getRoot())))
+            .build();
+    }
+
+    private static Pass buildCfgPass() {
+        return WrappedPass.of(ctx -> MyCfgCleanup.run(ctx.getGraph()));
+    }
+}
+```
+
+## LanguageSpec vs passes: a comparison
+
+| | `LanguageSpec` | `registerJavaPasses()` |
+|---|---|---|
+| **Output file extension** | Custom (e.g. `"kt"`) | Always `.java` |
+| **Class detection** | Custom `LanguageChooser` | N/A (applies to all Java classes) |
+| **CFG→statement conversion** | Custom `GraphParser` | Uses default `DomHelper` |
+| **Source writing** | Custom `StatementWriter` | Uses default `ClassWriter` |
+| **Effort** | High (full writer required) | Low to medium |
+| **Best for** | Kotlin, Scala, Groovy, etc. | Obfuscation cleanup, annotation stripping, minor resugaring |

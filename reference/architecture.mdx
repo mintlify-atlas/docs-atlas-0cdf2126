@@ -1,0 +1,288 @@
+---
+title: "Vineflower Decompilation Pipeline Architecture"
+sidebarTitle: "Architecture"
+description: "Deep dive into Vineflower's 8-stage decompilation pipeline: CFG construction, statement structuring, expression parsing, SSA/SSAU forms, and the Java writer."
+---
+
+Vineflower transforms JVM bytecode into readable Java source through a multi-stage pipeline. Each stage takes the output of the previous one and refines it further — from raw bytes, to a control-flow graph, to a statement tree, to exprent expressions, and finally to formatted source text. Understanding this pipeline is essential if you want to write plugin passes, debug decompiler output, or contribute to the codebase.
+
+<Note>
+This document describes Vineflower's **internal** architecture. Internal classes, pass ordering, and intermediate representations are subject to change between minor versions. Only the interfaces in `org.jetbrains.java.decompiler.api` and `org.jetbrains.java.decompiler.main.extern` are considered stable public API.
+</Note>
+
+---
+
+## Core terminology
+
+Before diving into stages, two fundamental terms appear throughout the entire codebase:
+
+| Term | Shorthand | Meaning |
+|---|---|---|
+| **Exprent** | `expr`, `exp` | An expression node — a leaf or subtree of the expression tree (constant, variable, method call, etc.) |
+| **Statement** | `stat` | A structural node in the control-flow graph (loop, if-block, try-catch, sequence, etc.) |
+
+Exprents are stored in a **tree**; statements are stored in a **graph**.
+
+---
+
+## The 8-stage pipeline
+
+<Steps>
+  <Step title="Bytecode reading and instruction sequencing">
+    The entry point is `StructMethod#parseBytecode`. Raw bytecode is extracted from the class structure and placed into a linear **instruction sequence** — an internal intermediate representation of the bytecode opcodes.
+
+    This stage is intentionally simple: it reads and initialises, making no structural decisions about control flow.
+  </Step>
+
+  <Step title="Control-flow graph (CFG) construction">
+    `ControlFlowGraph#<init>` converts the linear instruction sequence into a **basic-block graph**. The graph splits on:
+    - Conditional and unconditional jumps
+    - Branches (`tableswitch`, `lookupswitch`)
+    - Return instructions
+
+    After the initial graph is built, several transforms clean it up:
+    - JSR / `ret` instruction handling
+    - Empty block removal
+    - Redundant `goto` elimination
+    - Try-catch and `synchronized` range fixes
+    - Basic-block merging to produce a compact graph
+
+    This work happens in `MethodProcessor.codeToJava` near the top of the method.
+
+    **Plugin hook:** `JavaPassLocation.CFG_CONSTRUCTION` runs after this stage completes.
+  </Step>
+
+  <Step title="Control-flow to structured statements">
+    Java requires *structured* control flow — no arbitrary `goto`. This stage, implemented in `DomHelper` and `FastExtendedPostdominanceHelper`, converts the CFG into a **statement graph** that uses only breaks, continues, and fallthrough.
+
+    The algorithm works **inside-out**: it identifies small, simple statements first and builds larger compound statements around them. For example, a `while` loop is initially parsed as an infinite loop containing an `if` with a `break`.
+
+    When the postdominance analysis cannot identify all statements in one pass, `DomHelper` applies **recursive descent** — splitting the graph into sub-graphs, solving the simpler inner parts first, and using those solutions to help identify outer structures. If the graph is irreducible, the decompiler attempts to split it; if that also fails, a parsing error is raised.
+
+    **Plugin hook:** `JavaPassLocation.CFG_PRE_STATEMENT` runs just before this stage begins.
+  </Step>
+
+  <Step title="Finally-block deduplication">
+    Java compilers duplicate `finally` blocks — placing a copy at every exit point of the corresponding `try` body and catch blocks. `FinallyProcessor#iterateGraph` identifies and collapses these duplicates.
+
+    - If all copies are **identical**, the duplicates are removed and a clean `finally` clause is emitted.
+    - If copies differ, a **predicated finally** is produced: a synthetic `boolean` variable is set to `true` at try entry and `false` at every normal exit; the finally block executes only when the boolean is still `true`.
+
+    After any deduplication, `DomHelper` re-parses the statement graph to reflect the structural change.
+  </Step>
+
+  <Step title="Expression parsing">
+    `ExprProcessor` simulates the JVM operand stack and converts bytecode instructions into **assignment-based expressions**. At this stage, all intermediate stack values become explicit temporary variables with names like `var10000`, `var10001`, etc.
+
+    For example, `System.out.println("Hello")` becomes:
+    ```java
+    var10000 = System.out;
+    var10001 = "Hello";
+    var10000.println(var10001);
+    ```
+
+    The result is verbose but guaranteed to correctly model the stack semantics.
+  </Step>
+
+  <Step title="Stack simplification via SSA and SSAU">
+    `StackVarsProcessor#simplifyStackVars` collapses the verbose stack-variable expressions into the compact form you expect in output. It uses two complementary views:
+
+    **SSA form** (Static Single Assignment — `SSAConstructorSparseEx`)
+    Each assignment to a variable gets a unique "version" number. This allows the decompiler to reason about which definition reaches each use, enabling single-variable peephole optimisations in `SimplifyExprentsHelper`.
+
+    **SSAU form** (Static Single Assignment-Usage — built after SSA is reverted)
+    Extends SSA by also incrementing the version on each **use** of a variable. This creates a precise definition-use graph that `StackVarsProcessor#iterateExprent` uses to safely inline temporary stack variables into their single consumer.
+
+    The simplification loop runs until no more stack variables can be eliminated.
+  </Step>
+
+  <Step title="Further processing passes">
+    With stack variables resolved, a main processing loop in `MethodProcessor.codeToJava` runs a sequence of resugaring passes. Key passes include:
+
+    | Pass | Class | What it does |
+    |---|---|---|
+    | Loop restructuring | `MergeHelper` | Identifies exit conditions to convert infinite loops into `while`, `for`, `for-each`, or `do-while` |
+    | Label simplification | `LabelHelper` | Removes unnecessary labels; makes redundant breaks/continues invisible |
+    | Try-with-resources | `TryWithResourcesProcessor` | Collapses try-finally patterns into `try`-with-resources |
+    | Inline single blocks | `InlineSingleBlocksHelper` | Moves labeled-break targets inline, cleaning up parser artifacts |
+    | Variable definitions | `VarDefinitionHelper` | Determines the first-use scope for each variable and inserts type declarations |
+
+    **Plugin hooks available in the main loop:**
+
+    | `JavaPassLocation` | When it runs |
+    |---|---|
+    | `BEFORE_MAIN` | Before the main resugaring loop |
+    | `IN_LOOP_DECOMP` | Inside the loop-restructuring loop; returning `true` restarts the loop |
+    | `MAIN_LOOP` | Inside the main loop, after labels; returning `true` restarts the loop |
+    | `AFTER_MAIN` | After the main loop, before variable definitions |
+    | `AT_END` | After variable definitions — last chance to modify the exprent tree |
+    | `LATE_PROCESSING` | Right before the class is handed to `ClassWriter` |
+  </Step>
+
+  <Step title="Java writing">
+    `ClassWriter` traverses the **class structure** top-down, writing fields, methods, and nested types to a `TextBuffer`. For each method, it calls `toJava()` on the `RootStatement`, which recursively calls `toJava()` on every child statement and exprent until the entire graph is serialised to a string.
+
+    `TextTokenVisitor` callbacks fire during this traversal, annotating each class reference, field reference, method reference, parameter declaration, and local variable occurrence with its `TextRange` in the output.
+  </Step>
+</Steps>
+
+---
+
+## Statement types
+
+Statements model the **structure** of code. They are identified in a specific order during CFG-to-statement conversion:
+
+| Statement class | Discovery order | Represents |
+|---|---|---|
+| `DoStatement` | 1st | Any loop: `while`, `for`, `for-each`, `do-while`, or infinite. Initially always infinite; type refined later. |
+| `SwitchStatement` | 2nd | `switch` statement or expression |
+| `IfStatement` | 3rd | `if` / `if-else`. Boolean `&&` and `\|\|` are split into separate nested `IfStatement`s. |
+| `SequenceStatement` | 4th | An ordered list of statements executed sequentially |
+| `CatchStatement` | 5th | `try-catch`. Initially a plain `try`; converted to `try-with-resources` by a later pass. |
+| `CatchAllStatement` | Last | `finally` block. Initially unparsed; refined by `FinallyProcessor`. |
+
+### Non-parser statements
+
+These statements are not produced by the parser but appear in the graph via other mechanisms:
+
+| Statement class | Origin |
+|---|---|
+| `BasicBlockStatement` | Created when copying CFG blocks into the initial statement graph |
+| `RootStatement` | The root of every method's statement tree; has no parent |
+| `DummyExitStatement` | Represents the single logical exit point; all returns point to it |
+| `GeneralStatement` | Temporary placeholder during incremental graph parsing; removed after completion |
+| `SynchronizedStatement` | Identified after initial parsing due to special control-flow requirements |
+
+---
+
+## Exprent types
+
+Exprents are the **expression leaf/node** objects that hold the actual code logic inside `BasicBlockStatement`s.
+
+| Exprent class | Represents |
+|---|---|
+| `AssignmentExprent` | An assignment: `lhs = rhs` |
+| `InvocationExprent` | A method call: `obj.method(args)` or `ClassName.method(args)` |
+| `FieldExprent` | A field access: `obj.field` or `ClassName.field` |
+| `VarExprent` | A local variable reference |
+| `ConstExprent` | A literal constant: `42`, `"hello"`, `null` |
+| `FunctionExprent` | A unary or binary operator: `+`, `-`, `instanceof`, cast, etc. |
+| `NewExprent` | Object or array creation: `new Foo(...)`, `new int[n]` |
+| `ArrayExprent` | Array element access: `arr[i]` |
+| `ExitExprent` | A `return` or `throw` statement |
+| `MonitorExprent` | `monitorenter` / `monitorexit` |
+| `SwitchExprent` | Switch-expression arm value |
+
+---
+
+## SSA vs SSAU form
+
+<Tabs>
+  <Tab title="SSA form">
+    **SSA (Static Single Assignment)** assigns a unique version to every assignment:
+
+    ```
+    x₀ = 5
+    x₁ = x₀ + 1
+    y₀ = x₁
+    ```
+
+    Every variable name appears on the left-hand side **exactly once**. This form is used by `SimplifyExprentsHelper` to perform targeted peephole optimisations where a definition reaches a single use.
+  </Tab>
+  <Tab title="SSAU form">
+    **SSAU (Static Single Assignment-Usage)** extends SSA by also versioning every **use**:
+
+    ```
+    x₀ = 5
+    x₁ = x₀⁰ + 1   // ⁰ = first use of x₀
+    y₀ = x₁⁰        // ⁰ = first use of x₁
+    ```
+
+    This creates a complete definition-use graph. `StackVarsProcessor#iterateExprent` uses this graph to determine when it is safe to inline a temporary variable directly into the expression that consumes it, eliminating the temporary assignment entirely.
+
+    Both forms are ephemeral: SSA is reverted before SSAU is built, and SSAU is reverted after each simplification round.
+  </Tab>
+</Tabs>
+
+---
+
+## Where plugins fit in
+
+Plugins inject custom `Pass` implementations at specific `JavaPassLocation` values via `JavaPassRegistrar`. `ClassPass` implementations run at broader `ClassPassLocation` points.
+
+```java MyPlugin.java
+public class MyPlugin implements Plugin {
+  @Override
+  public String id() { return "MyPlugin"; }
+
+  @Override
+  public String description() { return "Demonstrates pass injection."; }
+
+  @Override
+  public void registerJavaPasses(JavaPassRegistrar registrar) {
+    // Run after labels are resolved in the main loop
+    registrar.register(
+        JavaPassLocation.MAIN_LOOP,
+        NamedPass.of("MyPlugin:myPass", ctx -> {
+          RootStatement root = ctx.getRoot();
+          // ... inspect or mutate root ...
+          return false; // return true to restart the loop
+        })
+    );
+
+    // Run after the class is fully processed but before writing
+    registrar.registerClassPass(
+        ClassPassLocation.BEFORE_WRITING,
+        classNode -> {
+          // ... inspect classNode ...
+          return false;
+        }
+    );
+  }
+}
+```
+
+### `JavaPassLocation` summary
+
+| Location | Loop restartable | Good for |
+|---|---|---|
+| `CFG_CONSTRUCTION` | No | CFG-level analysis or mutation |
+| `CFG_PRE_STATEMENT` | No | Pre-structuring graph rewrites |
+| `BEFORE_MAIN` | No | One-shot setup before resugaring |
+| `IN_LOOP_DECOMP` | Yes | Loop-type refinement |
+| `MAIN_LOOP` | Yes | General statement/exprent rewriting |
+| `AFTER_MAIN` | No | Post-loop cleanup, pre-vardef |
+| `AT_END` | No | Final exprent adjustments |
+| `LATE_PROCESSING` | No | Last-moment class-level changes |
+
+### `ClassPassLocation` summary
+
+| Location | Good for |
+|---|---|
+| `BEFORE_PROCESSING` | Pre-analysis before any method is decompiled |
+| `AFTER_PROCESSING` | Post-analysis after all methods are decompiled |
+| `BEFORE_WRITING` | Structural changes before source serialisation |
+
+---
+
+## Key classes by role
+
+| Class | Package fragment | Role |
+|---|---|---|
+| `ConsoleDecompiler` | `main.decompiler` | CLI entry point |
+| `Fernflower` | `main` | Engine: wires together context, plugins, and class processor |
+| `StructContext` | `struct` | Holds all source/library entries and drives output |
+| `ClassesProcessor` | `main` | Orchestrates per-class decompilation |
+| `MethodProcessor` | `main.rels` | Owns the per-method pipeline (`codeToJava`) |
+| `ControlFlowGraph` | `code.cfg` | CFG construction and simplification |
+| `DomHelper` | `modules.decompiler` | CFG → statement graph conversion |
+| `ExprProcessor` | `modules.decompiler` | Stack simulation → exprent assignments |
+| `SSAConstructorSparseEx` | `modules.decompiler` | SSA form construction |
+| `StackVarsProcessor` | `modules.decompiler` | SSAU-based variable inlining |
+| `MergeHelper` | `modules.decompiler` | Loop type refinement |
+| `LabelHelper` | `modules.decompiler` | Break/continue label simplification |
+| `FinallyProcessor` | `modules.decompiler` | Finally block deduplication |
+| `TryWithResourcesProcessor` | `modules.decompiler` | Try-with-resources identification |
+| `VarDefinitionHelper` | `modules.decompiler` | Variable declaration placement |
+| `ClassWriter` | `main` | Statement graph → source string |
+| `PluginContext` | `main.plugins` | Plugin discovery, lifecycle, and pass dispatch |

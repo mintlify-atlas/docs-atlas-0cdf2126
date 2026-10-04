@@ -1,0 +1,214 @@
+---
+title: "Bundled Plugins: Kotlin, Scala, Renaming, and IDEA"
+sidebarTitle: "Bundled Plugins"
+description: "Reference for the four plugins that ship with Vineflower — Kotlin decompilation, Scala support, JAD/Tiny variable renaming, and IDEA @NotNull stripping."
+---
+
+Vineflower ships four plugins alongside its core decompiler. Three of them — **Kotlin**, **IdeaNotNull**, and **VariableRenaming** — are compiled into sub-JARs and placed under `META-INF/plugins/` inside the fat `vineflower.jar`. The fat JAR's class loader discovers and loads them automatically at startup via Java's `ServiceLoader` mechanism, without any user configuration. A fourth plugin, **Scala**, lives in the repository but is not wired into the default build and must be included manually.
+
+<Note>
+  The slim `vineflower-slim.jar` (Maven classifier `slim`) contains only the decompiler core. It does **not** include any of the bundled plugins. Use the fat JAR (no classifier, the default published artifact) if you want these plugins auto-loaded.
+</Note>
+
+## Listing loaded plugins
+
+From the command line, pass `--list-plugins` to print each loaded plugin's ID and description:
+
+```bash
+java -jar vineflower.jar --list-plugins
+```
+
+The output lists every plugin discovered via ServiceLoader, including third-party plugins on the class path.
+
+---
+
+## Kotlin plugin {#kotlin}
+
+**Plugin ID:** `Kotlin`  
+**Class:** `org.vineflower.kotlin.KotlinPlugin`  
+**ServiceLoader file:** `META-INF/services/org.jetbrains.java.decompiler.api.plugin.Plugin` → `org.vineflower.kotlin.KotlinPlugin`  
+**Output extension:** `.kt`
+
+The Kotlin plugin detects class files that carry a `kotlin/Metadata` annotation and decompiles them back to idiomatic Kotlin source code. It provides a full `LanguageSpec` — including a custom `KotlinChooser`, a custom `KotlinWriter`, and an elaborate method-level pass pipeline — rather than augmenting the Java pipeline with a few extra passes.
+
+Kotlin constructs that the plugin restores include:
+
+- `data class` declarations
+- `object` and `companion object` declarations
+- Extension functions and extension properties
+- `val`/`var` properties with backing fields
+- Default parameter values and overload stubs
+- String template conversion (`${}` syntax)
+- Kotlin-style type annotations and nullability markers
+
+The plugin reads protobuf-encoded Kotlin metadata from the `@Metadata` annotation's `d1`/`d2` fields. If the metadata is absent or malformed, the class is decompiled as Java instead.
+
+### Kotlin plugin options
+
+| Option key | Type | Default | Description |
+|---|---|---|---|
+| `kt-enable` | Boolean | `1` | Decompile Kotlin classes as Kotlin instead of Java |
+| `kt-show-public` | Boolean | `1` | Emit the `public` keyword on public declarations |
+| `kt-unknown-defaults` | String | `"..."` | String to use for unknown default argument values; empty to omit |
+| `kt-collapse-string-concat` | Boolean | `1` | Convert `+`-chain string concatenations to Kotlin string templates |
+| `kt-export-metadata` | Boolean | `0` | Parse Kotlin metadata even when `kt-enable=0`, for use by other plugins |
+| `kt-decompile-facades` | Boolean | `0` | Decompile multi-file facades into their wrapper-function classes |
+
+### Enabling / disabling Kotlin decompilation
+
+```bash
+# Disable Kotlin decompilation (classes decompiled as Java):
+java -jar vineflower.jar -kt-enable=0 Input.jar output/
+
+# Keep metadata parsing active for other plugins while suppressing Kotlin output:
+java -jar vineflower.jar -kt-enable=0 -kt-export-metadata=1 Input.jar output/
+```
+
+---
+
+## IdeaNotNull plugin {#idea-not-null}
+
+**Plugin ID:** `IdeaNotNull`  
+**Class:** `org.vineflower.ideanotnull.IdeaNotNullPlugin`  
+**ServiceLoader file:** `META-INF/services/org.jetbrains.java.decompiler.api.plugin.Plugin` → `org.vineflower.ideanotnull.IdeaNotNullPlugin`
+
+When IntelliJ IDEA compiles code with `@NotNull`-annotated parameters or return values, it inserts runtime null-checks that look like this in the decompiled output:
+
+```java
+// Before IdeaNotNull plugin:
+public String greet(String name) {
+    if (name == null) {
+        $$$reportNull$$$0(0);
+    }
+    return "Hello, " + name;
+}
+```
+
+The `IdeaNotNullPlugin` registers a `Pass` at `JavaPassLocation.MAIN_LOOP` that detects and removes these synthesised null-check blocks, producing clean output:
+
+```java
+// After IdeaNotNull plugin:
+public String greet(String name) {
+    return "Hello, " + name;
+}
+```
+
+The pass works by pattern-matching `IfStatement` nodes whose condition is `param == null` and whose body is a single `$$$reportNull$$$0(...)` invocation. It also handles return-value checks inserted at method exits.
+
+### IdeaNotNull plugin options
+
+| Option key | Short name | Type | Default | Description |
+|---|---|---|---|---|
+| `resugar-idea-notnull` | `inn` | Boolean | `1` | Remove `@NotNull`-generated null-check blocks |
+
+### Disabling the plugin behaviour
+
+```bash
+# Keep the plugin loaded but disable the null-check removal:
+java -jar vineflower.jar -inn=0 Input.jar output/
+```
+
+---
+
+## VariableRenaming plugin {#variable-renaming}
+
+**Plugin ID:** `VariableRenaming`  
+**Class:** `org.vineflower.variablerenaming.VariableRenamingPlugin`  
+**ServiceLoader file:** `META-INF/services/org.jetbrains.java.decompiler.api.plugin.Plugin` → `org.vineflower.variablerenaming.VariableRenamingPlugin`
+
+The `VariableRenamingPlugin` replaces Vineflower's default variable-naming strategy by returning an `IVariableNamingFactory` from `getRenamingFactory()`. Two built-in strategies are provided: `jad` and `tiny`.
+
+### Naming strategies
+
+<Tabs>
+  <Tab title="jad (JAD-style)">
+    Assigns short, type-derived names that mimic the output of the historic JAD decompiler. Examples: `int` locals become `i`, `j`, `k`, `l`; `String` locals become `s`, `s1`, `s2`; arbitrary object types become a lowercase version of the class's simple name.
+
+    Enable with:
+
+    ```bash
+    java -jar vineflower.jar -variable-renaming=jad Input.jar output/
+    ```
+
+    Or use the legacy option (deprecated but still honoured):
+
+    ```bash
+    java -jar vineflower.jar -jad-style-variable-naming=1 Input.jar output/
+    ```
+  </Tab>
+  <Tab title="tiny (Tiny mapping files)">
+    Renames variables according to a [Tiny v2 mapping file](https://github.com/FabricMC/tiny-remapper), commonly used in Minecraft modding toolchains. The mapping file provides human-readable names for obfuscated locals and parameters.
+
+    Enable with:
+
+    ```bash
+    java -jar vineflower.jar -variable-renaming=tiny Input.jar output/
+    ```
+
+    <Note>
+      The `tiny` strategy reads local-variable name information from the mapping file. Ensure your Tiny mapping file includes local variable mappings (Tiny v2 format with `ARG` and `VAR` entries) for the best results.
+    </Note>
+  </Tab>
+</Tabs>
+
+### VariableRenaming plugin options
+
+| Option key | Type | Default | Description |
+|---|---|---|---|
+| `variable-renaming` | String | `null` | Renaming strategy to use. Built-in values: `"jad"`, `"tiny"` |
+| `rename-parameters` | Boolean | `0` | Apply the chosen renamer to method parameters in addition to locals |
+| `jad-style-variable-naming` | Boolean | `0` | _(Deprecated)_ Alias for `variable-renaming=jad` |
+| `jad-style-parameter-naming` | Boolean | `0` | _(Deprecated)_ Alias for `rename-parameters=1` |
+
+### Registering a custom renaming strategy
+
+Third-party code can add its own naming strategy to the `VariableRenaming` plugin's registry by calling `Renamers.registerProvider()` before the decompiler starts:
+
+```java
+import org.vineflower.variablerenaming.Renamers;
+import org.jetbrains.java.decompiler.main.extern.IVariableNamingFactory;
+
+// Register a custom factory under the key "myscheme"
+Renamers.registerProvider("myscheme", method -> new MyVariableNameProvider(method));
+
+// Then enable it via options:
+// -variable-renaming=myscheme
+```
+
+---
+
+## Scala plugin {#scala}
+
+**Plugin ID:** `Scala`  
+**Class:** `org.vineflower.scala.ScalaPlugin`
+
+The Scala plugin is a stub implementation present in the Vineflower repository under `plugins/scala/`, but it is **not included** in the `settings.gradle` build configuration and therefore not compiled into `vineflower.jar` by default.
+
+```groovy settings.gradle
+// Only these three sub-projects are included in the main build:
+[
+  'idea-not-null',
+  'kotlin',
+  'variable-renaming'
+].each {
+  include it
+  project(":$it").projectDir = new File(rootProject.projectDir, "plugins/$it")
+}
+```
+
+The current `ScalaPlugin` implementation provides only an `id()` (`"Scala"`) and a `description()`. No `LanguageSpec`, passes, or options are wired up yet. To use it, you would need to build the `plugins/scala` sub-project separately and place the resulting JAR on the class path.
+
+<Warning>
+  The Scala plugin is a work in progress. Do not rely on it for production Scala decompilation. Monitor the Vineflower repository for updates to its status.
+</Warning>
+
+---
+
+## Summary
+
+| Plugin | ID | Extension | Bundled in fat JAR | Mechanism |
+|---|---|---|---|---|
+| Kotlin | `Kotlin` | `.kt` | ✅ | `LanguageSpec` |
+| IdeaNotNull | `IdeaNotNull` | `.java` | ✅ | `Pass` at `MAIN_LOOP` |
+| VariableRenaming | `VariableRenaming` | `.java` | ✅ | `IVariableNamingFactory` |
+| Scala | `Scala` | — | ❌ (source only) | Stub |

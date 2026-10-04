@@ -1,0 +1,283 @@
+---
+title: "Writing a Vineflower Plugin from Scratch"
+sidebarTitle: "Writing Plugins"
+description: "Step-by-step guide to implementing the Plugin interface, registering passes, exposing options, and packaging your plugin for use with Vineflower."
+---
+
+Writing a Vineflower plugin means implementing a single Java interface — `org.jetbrains.java.decompiler.api.plugin.Plugin` — and registering it via the Java ServiceLoader. From there you can inject IR transformation passes, contribute decompiler options, replace the variable-naming strategy, or provide a complete language back-end. This guide walks through every step from project setup to packaging.
+
+## Creating a plugin
+
+<Steps>
+  <Step title="Add Vineflower as a compile-time dependency">
+    Vineflower publishes its API in the main artifact. Use the slim JAR (classifier `slim`) as a `compileOnly` dependency so it does not end up bundled in your plugin JAR.
+
+    <CodeGroup>
+      ```groovy build.gradle
+      dependencies {
+          compileOnly 'org.vineflower:vineflower:1.10.1:slim'
+      }
+      ```
+
+      ```kotlin build.gradle.kts
+      dependencies {
+          compileOnly("org.vineflower:vineflower:1.10.1:slim")
+      }
+      ```
+    </CodeGroup>
+  </Step>
+
+  <Step title="Implement the Plugin interface">
+    Create a class that implements `org.jetbrains.java.decompiler.api.plugin.Plugin`. Only `id()` and `description()` are required; every other method has a default no-op implementation.
+
+    ```java MyPlugin.java
+    package com.example.myplugin;
+
+    import org.jetbrains.java.decompiler.api.plugin.Plugin;
+
+    public class MyPlugin implements Plugin {
+
+        @Override
+        public String id() {
+            // Must be unique PascalCase across all loaded plugins
+            return "MyPlugin";
+        }
+
+        @Override
+        public String description() {
+            return "Demonstrates how to write a Vineflower plugin.";
+        }
+    }
+    ```
+  </Step>
+
+  <Step title="Register via ServiceLoader">
+    Create the ServiceLoader descriptor so Vineflower can discover your plugin at runtime.
+
+    ```text META-INF/services/org.jetbrains.java.decompiler.api.plugin.Plugin
+    com.example.myplugin.MyPlugin
+    ```
+  </Step>
+
+  <Step title="Override optional lifecycle hooks">
+    Use `initialize()`, `beforeDecompile()`, and `close()` for setup, per-run reset, and teardown respectively.
+
+    ```java MyPlugin.java
+    @Override
+    public void initialize() {
+        // Called once after all plugins are constructed.
+        // Good place to read configuration or register class attributes.
+    }
+
+    @Override
+    public void beforeDecompile() {
+        // Called just before each decompilation run begins.
+        // Reset any mutable per-run state here.
+    }
+
+    @Override
+    public void close() {
+        // Called after decompilation finishes and the context is cleared.
+        // Release file handles, connections, etc.
+    }
+    ```
+  </Step>
+
+  <Step title="Register Java passes (optional)">
+    Override `registerJavaPasses(JavaPassRegistrar)` to inject custom passes into the method-level or class-level decompilation pipeline.
+
+    ```java MyPlugin.java
+    import org.jetbrains.java.decompiler.api.java.JavaPassLocation;
+    import org.jetbrains.java.decompiler.api.java.JavaPassRegistrar;
+    import org.jetbrains.java.decompiler.api.plugin.pass.NamedPass;
+
+    @Override
+    public void registerJavaPasses(JavaPassRegistrar registrar) {
+        registrar.register(
+            JavaPassLocation.AT_END,
+            new NamedPass("MyPass", ctx -> {
+                // ctx gives access to RootStatement, StructMethod, StructClass, etc.
+                System.out.println("Processing: " + ctx.getMethod().getName());
+                return false; // return true only if you modified the IR
+            })
+        );
+    }
+    ```
+
+    <Tip>
+      Use `MainPassBuilder` to chain multiple passes into a single composite pass, and `LoopingPassBuilder` to build a sub-loop that re-runs until no pass returns `true`. See the [Pass System](/plugins/pass-system) page for the full builder API.
+    </Tip>
+  </Step>
+
+  <Step title="Expose plugin options (optional)">
+    Return a `PluginOptions` from `getPluginOptions()` to contribute typed options to Vineflower's option map. Options are then readable anywhere via `DecompilerContext.getProperty(key)`.
+
+    First define an options interface with annotated constants:
+
+    ```java MyPluginOptions.java
+    package com.example.myplugin;
+
+    import org.jetbrains.java.decompiler.api.DecompilerOption;
+    import org.jetbrains.java.decompiler.api.plugin.PluginOptions;
+    import org.jetbrains.java.decompiler.main.extern.IFernflowerPreferences.*;
+
+    public interface MyPluginOptions {
+
+        @Name("Enable verbose logging")
+        @Description("Print a log line for every method processed by MyPlugin.")
+        @Type(DecompilerOption.Type.BOOLEAN)
+        String VERBOSE = "myplugin-verbose";
+
+        static void addDefaults(PluginOptions.AddDefaults cons) {
+            cons.addDefault(VERBOSE, "0");
+        }
+    }
+    ```
+
+    Then wire it up in your plugin class:
+
+    ```java MyPlugin.java
+    import org.jetbrains.java.decompiler.api.plugin.PluginOptions;
+    import org.jetbrains.java.decompiler.util.Pair;
+
+    @Override
+    public PluginOptions getPluginOptions() {
+        return () -> Pair.of(MyPluginOptions.class, MyPluginOptions::addDefaults);
+    }
+    ```
+
+    Read the option at runtime:
+
+    ```java MyPlugin.java
+    import org.jetbrains.java.decompiler.main.DecompilerContext;
+
+    boolean verbose = DecompilerContext.getOption(MyPluginOptions.VERBOSE);
+    ```
+  </Step>
+
+  <Step title="Provide a custom variable-naming factory (optional)">
+    Return an `IVariableNamingFactory` from `getRenamingFactory()` to replace the default variable-naming strategy. The factory is invoked once per method to produce a stateful `IVariableNameProvider`.
+
+    ```java MyPlugin.java
+    import org.jetbrains.java.decompiler.main.extern.IVariableNamingFactory;
+
+    @Override
+    public IVariableNamingFactory getRenamingFactory() {
+        return method -> new MyVariableNameProvider(method);
+    }
+    ```
+  </Step>
+
+  <Step title="Package and deploy">
+    Build a JAR containing your compiled classes and the `META-INF/services/` descriptor. To use the plugin:
+
+    - **Fat JAR path**: Place your plugin JAR in a location accessible to Vineflower's class loader. When using the API, ensure the plugin JAR is on the same class path as `vineflower.jar`.
+    - **Programmatic path**: Add the plugin to the class path before calling `Decompiler.builder().build()`. ServiceLoader will pick it up automatically.
+
+    There is no explicit `addPlugin()` method on `Decompiler.Builder` — all discovery happens via ServiceLoader.
+  </Step>
+</Steps>
+
+## Complete minimal plugin example
+
+The following is a self-contained plugin that logs every method name at the `AT_END` pass location and exposes a `myplugin-verbose` boolean option to toggle that logging.
+
+```java MyPlugin.java
+package com.example.myplugin;
+
+import org.jetbrains.java.decompiler.api.java.JavaPassLocation;
+import org.jetbrains.java.decompiler.api.java.JavaPassRegistrar;
+import org.jetbrains.java.decompiler.api.plugin.Plugin;
+import org.jetbrains.java.decompiler.api.plugin.PluginOptions;
+import org.jetbrains.java.decompiler.api.plugin.pass.NamedPass;
+import org.jetbrains.java.decompiler.main.DecompilerContext;
+import org.jetbrains.java.decompiler.util.Pair;
+
+public class MyPlugin implements Plugin {
+
+    @Override
+    public String id() {
+        return "MyPlugin";
+    }
+
+    @Override
+    public String description() {
+        return "Logs every processed method name when myplugin-verbose is enabled.";
+    }
+
+    @Override
+    public PluginOptions getPluginOptions() {
+        return () -> Pair.of(MyPluginOptions.class, MyPluginOptions::addDefaults);
+    }
+
+    @Override
+    public void registerJavaPasses(JavaPassRegistrar registrar) {
+        registrar.register(
+            JavaPassLocation.AT_END,
+            new NamedPass("MyPluginLogger", ctx -> {
+                if (DecompilerContext.getOption(MyPluginOptions.VERBOSE)) {
+                    System.out.println("[MyPlugin] method: "
+                        + ctx.getEnclosingClass().qualifiedName
+                        + "." + ctx.getMethod().getName());
+                }
+                return false;
+            })
+        );
+    }
+}
+```
+
+```java MyPluginOptions.java
+package com.example.myplugin;
+
+import org.jetbrains.java.decompiler.api.DecompilerOption;
+import org.jetbrains.java.decompiler.api.plugin.PluginOptions;
+import org.jetbrains.java.decompiler.main.extern.IFernflowerPreferences.*;
+
+public interface MyPluginOptions {
+
+    @Name("Verbose logging")
+    @Description("Log every method name processed by MyPlugin.")
+    @Type(DecompilerOption.Type.BOOLEAN)
+    String VERBOSE = "myplugin-verbose";
+
+    static void addDefaults(PluginOptions.AddDefaults cons) {
+        cons.addDefault(VERBOSE, "0");
+    }
+}
+```
+
+```text META-INF/services/org.jetbrains.java.decompiler.api.plugin.Plugin
+com.example.myplugin.MyPlugin
+```
+
+## Using MainPassBuilder and LoopingPassBuilder
+
+When you need to compose several passes into one cohesive unit, the two builder helpers make that straightforward.
+
+`MainPassBuilder` creates a sequential pass — all child passes run in order and the composite returns `true` if any child did:
+
+```java MyPlugin.java
+import org.jetbrains.java.decompiler.api.plugin.pass.MainPassBuilder;
+import org.jetbrains.java.decompiler.api.plugin.pass.WrappedPass;
+
+Pass composite = new MainPassBuilder()
+    .addPass("StepOne", ctx -> doStepOne(ctx.getRoot()))
+    .addPass("StepTwo", WrappedPass.of(ctx -> doStepTwo(ctx.getRoot())))
+    .build();
+```
+
+`LoopingPassBuilder` creates a loop — passes run repeatedly until a looping-flagged pass returns `false` for a full iteration:
+
+```java MyPlugin.java
+import org.jetbrains.java.decompiler.api.plugin.pass.LoopingPassBuilder;
+
+Pass loop = new LoopingPassBuilder("MyLoop")
+    .addLoopingPass("Simplify", ctx -> simplify(ctx.getRoot()))
+    .addFallthroughPass("Cleanup", ctx -> { cleanup(ctx.getRoot()); return false; })
+    .build();
+```
+
+<Tip>
+  `WrappedPass.of(Consumer<PassContext>)` adapts a void lambda into a `Pass` that always returns `true`. Use it for passes that unconditionally transform the IR so the loop bookkeeping stays correct.
+</Tip>

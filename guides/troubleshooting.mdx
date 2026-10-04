@@ -1,0 +1,302 @@
+---
+title: "Troubleshooting Common Vineflower Decompiler Issues"
+sidebarTitle: "Troubleshooting"
+description: "Diagnose and fix the most frequent Vineflower decompilation problems — from CFG failures and OOM errors to missing generics and slow performance."
+---
+
+Vineflower is designed to produce high-quality output in the vast majority of cases, but certain bytecode patterns, obfuscated inputs, or configuration mistakes can lead to unexpected results. This guide catalogs the most frequently encountered problems, explains their root causes, and gives concrete steps to resolve each one. Each entry is actionable: read the symptom, apply the fix, and move on.
+
+## Common Problems
+
+<Accordion title="Decompilation produces // $FF: couldn't be decompiled">
+
+**Cause:** Vineflower's control-flow graph (CFG) analysis failed to reduce the method into a structured statement tree. This happens when the bytecode contains irreducible control flow, malformed exception ranges, or constructs that the current statement parser cannot handle. The comment is Vineflower's way of marking the method rather than silently omitting it.
+
+**Solutions:**
+
+1. **Enable bytecode dumping** so you can see the raw instructions in place of the missing body:
+
+   ```bash
+   java -jar vineflower.jar --dump-bytecode-on-error=1 --dump-exception-on-error=1 input.jar output/
+   ```
+
+   Or via the API:
+
+   ```java
+   .option(IFernflowerPreferences.DUMP_BYTECODE_ON_ERROR,   "1")
+   .option(IFernflowerPreferences.DUMP_EXCEPTION_ON_ERROR,  "1")
+   ```
+
+2. **Try JSR inlining** for classes compiled with Java 6 or earlier. Some old compilers emit JSR/RET instructions that Vineflower does not process unless this flag is set:
+
+   ```bash
+   java -jar vineflower.jar --force-jsr-inline=1 input.jar output/
+   ```
+
+3. **Check the Java version** of the class file. Use `javap -verbose MyClass.class | grep "major version"`. If the major version is higher than what your current Vineflower release supports (Vineflower 1.12 targets up to Java 25), you may need a newer build.
+
+4. **Report the issue.** If none of the above helps and you can share the class file, open a ticket at [https://github.com/Vineflower/vineflower/issues](https://github.com/Vineflower/vineflower/issues).
+
+</Accordion>
+
+<Accordion title="OutOfMemoryError on large JARs">
+
+**Cause:** Decompiling large JARs (especially with many classes or deeply nested lambdas) consumes significant heap. Vineflower defaults to all available processors for threading, which multiplies peak memory usage.
+
+**Solutions:**
+
+1. **Increase the JVM heap size:**
+
+   ```bash
+   java -Xmx4g -jar vineflower.jar input.jar output/
+   ```
+
+   For very large inputs (e.g., Minecraft JARs) `-Xmx8g` or higher may be needed.
+
+2. **Reduce the thread count** so fewer methods are held in memory simultaneously:
+
+   ```bash
+   java -Xmx4g -jar vineflower.jar --thread-count=2 input.jar output/
+   ```
+
+3. **Decompile in batches.** Use `--only=` to select a subset of packages at a time:
+
+   ```bash
+   java -jar vineflower.jar --only=com/example/modelonly input.jar output/
+   ```
+
+</Accordion>
+
+<Accordion title="Output still looks like obfuscated code">
+
+**Cause:** Vineflower does not magically recover original names. Short names like `a`, `b`, `c` are preserved verbatim unless a renaming strategy is active.
+
+**Solutions:**
+
+1. **Enable automatic suffix renaming** as a quick improvement:
+
+   ```bash
+   java -jar vineflower.jar --rename-members=1 input.jar output/
+   ```
+
+2. **Supply a mapping file** via `IIdentifierRenamer` or the Tiny naming plugin. See the [Identifier Renaming guide](/guides/identifier-renaming) for a complete walkthrough.
+
+3. **Enable JAD-style local variable names** for more readable method bodies:
+
+   ```bash
+   java -jar vineflower.jar --variable-renaming=jad input.jar output/
+   ```
+
+</Accordion>
+
+<Accordion title="Missing generics in output (raw types appear instead)">
+
+**Cause:** Generics information is stored in the `Signature` attribute. If the attribute is missing (stripped by a build tool, obfuscator, or ProGuard) Vineflower cannot reconstruct it. Alternatively, the `decompile-generics` option may have been disabled.
+
+**Solutions:**
+
+1. **Verify the option is enabled** (it is `1` by default):
+
+   ```bash
+   java -jar vineflower.jar --decompile-generics=1 input.jar output/
+   ```
+
+2. **Check that the class files contain Signature attributes:**
+
+   ```bash
+   javap -verbose MyClass.class | grep Signature
+   ```
+
+   If no `Signature` attributes appear, the generic information was stripped at compile time and cannot be recovered.
+
+3. **Avoid stripping Signature attributes in ProGuard.** If you control the ProGuard configuration, add `-keepattributes Signature` to preserve generics in your release build.
+
+</Accordion>
+
+<Accordion title="Kotlin or Scala classes decompile as Java">
+
+**Cause:** Vineflower ships a Kotlin plugin and a Scala plugin that apply language-specific decompilation passes (resugaring `when` expressions, data class destructuring, Scala traits, etc.). If those plugins are not loaded, the class files are treated as plain Java.
+
+**Solutions:**
+
+1. **Use the full `vineflower.jar`** (not the slim `-slim` classifier). The full JAR bundles all plugins under `META-INF/plugins/`:
+
+   ```bash
+   java -jar vineflower.jar --list-plugins
+   ```
+
+   You should see `Kotlin` and `Scala` in the output.
+
+2. **If using the library API**, ensure your dependency pulls in the full artifact, not the slim JAR:
+
+   ```groovy
+   // Correct: full JAR (default classifier)
+   implementation 'org.vineflower:vineflower:1.12.0'
+   ```
+
+3. **Check for plugin load errors** by enabling TRACE logging (see [Logging](#logging) below).
+
+</Accordion>
+
+<Accordion title="Slow decompilation on large inputs">
+
+**Cause:** By default, Vineflower uses all available processors. On shared build servers, this can saturate CPU. Large method bodies with complex control flow also take disproportionately long.
+
+**Solutions:**
+
+1. **Tune `thread-count`** to a value appropriate for your environment:
+
+   ```bash
+   java -jar vineflower.jar --thread-count=4 input.jar output/
+   ```
+
+2. **Filter to only the classes you need** using `--only=`:
+
+   ```bash
+   java -jar vineflower.jar --only=com/example/feature input.jar output/
+   ```
+
+3. **Use `included-classes` for regex-based filtering:**
+
+   ```bash
+   java -jar vineflower.jar --included-classes=^com\.example\.feature\. input.jar output/
+   ```
+
+4. **Skip resource copying** if you only need source files:
+
+   ```bash
+   java -jar vineflower.jar --skip-extra-files=1 input.jar output/
+   ```
+
+</Accordion>
+
+<Accordion title="Inner classes missing from output">
+
+**Cause:** The `decompile-inner` option controls whether inner classes are inlined into their enclosing class file. It defaults to `1` (enabled). If it was set to `0`, inner classes are emitted as separate top-level files instead of being merged, or may be skipped entirely in some output modes.
+
+**Solution:**
+
+```bash
+java -jar vineflower.jar --decompile-inner=1 input.jar output/
+```
+
+Also check `--warn-inconsistent-inner-attributes=1` (enabled by default) — if the InnerClasses attribute is inconsistent, Vineflower will log a warning rather than silently dropping the class:
+
+```bash
+java -jar vineflower.jar --warn-inconsistent-inner-attributes=1 input.jar output/
+```
+
+</Accordion>
+
+<Accordion title="StackOverflowError during decompilation">
+
+**Cause:** Certain pathological control-flow structures or very deeply nested expressions cause Vineflower's recursive statement-traversal code to exhaust the default JVM stack.
+
+**Solutions:**
+
+1. **Increase the stack size** with `-Xss`:
+
+   ```bash
+   java -Xss8m -jar vineflower.jar input.jar output/
+   ```
+
+2. **Report the issue** to the Vineflower issue tracker with the class file attached (if you have distribution rights). Stack overflows almost always indicate a missing code-path or off-by-one in the statement parser, and the team wants to know about them.
+
+</Accordion>
+
+<Accordion title="IntelliJ @NotNull instrumentation appears in decompiled output">
+
+**Cause:** IntelliJ IDEA instruments bytecode with `@NotNull` parameter checks that produce synthetic `if` statements at the top of methods. Vineflower decompiles these literally by default.
+
+**Solution:** Enable the bundled `idea-not-null` plugin. It is already loaded when you use the full JAR; activate it by default — it removes those synthetic checks from the output automatically. Verify it is present:
+
+```bash
+java -jar vineflower.jar --list-plugins
+# Should show: IdeaNotNull — ...
+```
+
+No extra configuration is needed once the plugin is loaded.
+
+</Accordion>
+
+<Accordion title="Config file not being read">
+
+**Cause:** The `-cfg` flag expects either `-cfg=<path>` or `-cfg <path>` with a path to a plain-text file where each line is one argument. Common mistakes are using a relative path that doesn't resolve from the working directory, or using the equals sign without the path immediately following.
+
+**Solutions:**
+
+1. **Use an absolute path** to avoid ambiguity:
+
+   ```bash
+   java -jar vineflower.jar -cfg=/home/user/project/vineflower.cfg input.jar output/
+   ```
+
+2. **Check the file format.** Each line must be one argument, exactly as you would pass it on the command line. Comments are not supported. A valid config file looks like:
+
+   ```text vineflower.cfg
+   --rename-members=1
+   --decompile-generics=1
+   --thread-count=4
+   ```
+
+3. **Verify the file exists** before launching: Vineflower prints `error: missing config '<path>'` and exits if the file is not found.
+
+</Accordion>
+
+## Logging
+
+Enabling detailed logging is the fastest way to diagnose obscure failures. Vineflower's logger has four severity levels: `TRACE`, `INFO`, `WARN`, and `ERROR`.
+
+### Enable TRACE logging from the command line
+
+```bash
+java -jar vineflower.jar --log-level=trace input.jar output/ 2>&1 | tee vineflower.log
+```
+
+### Enable TRACE logging via the API
+
+```java
+import org.jetbrains.java.decompiler.main.extern.IFernflowerLogger;
+
+IFernflowerLogger logger = new MyLogger();
+logger.setSeverity(IFernflowerLogger.Severity.TRACE);
+
+Decompiler decompiler = Decompiler.builder()
+    .inputs(new File("input.jar"))
+    .output(mySaver)
+    .logger(logger)
+    .build();
+```
+
+TRACE output includes per-class and per-method lifecycle events (`startProcessingClass`, `startMethod`, etc.) which pinpoint exactly where in the decompilation pipeline a failure occurs.
+
+### Lifecycle hooks in the logger
+
+`IFernflowerLogger` provides optional override hooks you can use to track progress:
+
+```java
+@Override public void startProcessingClass(String className) { /* before decompile */ }
+@Override public void endProcessingClass()                   { /* after decompile  */ }
+@Override public void startMethod(String methodName)         { /* entering method  */ }
+@Override public void endMethod()                            { /* leaving method   */ }
+```
+
+These are no-ops by default. Overriding them lets you build progress bars, per-class timing logs, or selective verbose output.
+
+## Reporting Bugs
+
+If you encounter an issue that does not match any of the entries above, please open a ticket at:
+
+**[https://github.com/Vineflower/vineflower/issues](https://github.com/Vineflower/vineflower/issues)**
+
+To help the maintainers reproduce and fix the problem quickly, include the following in your report:
+
+- **Vineflower version** (`java -jar vineflower.jar --help` prints the version)
+- **The full set of options** you used (or the config file contents)
+- **The input class file** that triggers the issue, if you have the right to distribute it
+- **The full exception stack trace** from the log (run with `--log-level=trace`)
+- **Expected output** vs. **actual output** (a snippet is fine)
+
+<Note>
+**AI contributions policy:** Vineflower's source code and documentation do not accept contributions generated by AI tools (GitHub Copilot, ChatGPT, etc.). This policy exists to protect the project's legal standing and to maintain code quality. If you are contributing a bug fix or test case to accompany your issue report, please ensure it is written by hand. This restriction applies only to contributions — using AI tools to *understand* the decompiler output or *read* documentation is fine.
+</Note>

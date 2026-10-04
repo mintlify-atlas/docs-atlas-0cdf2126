@@ -1,0 +1,120 @@
+---
+title: "Vineflower Plugin System Overview"
+sidebarTitle: "Overview"
+description: "Extend Vineflower with custom passes, JVM language support, variable renaming, and extra options via the Plugin interface and Java ServiceLoader discovery."
+---
+
+Vineflower's plugin system gives external code a first-class way to participate in the decompilation pipeline. A plugin can register IR transformation passes, declare complete support for a non-Java JVM language, contribute extra decompiler options, or replace the variable-naming strategy — without touching Vineflower's own source. Plugins are plain Java classes on the classpath; no reflection tricks or agent hackery required.
+
+## How plugins are discovered
+
+Vineflower uses the standard Java **ServiceLoader** mechanism. To register a plugin, create the file:
+
+```text
+META-INF/services/org.jetbrains.java.decompiler.api.plugin.Plugin
+```
+
+and list the fully-qualified class name of each `Plugin` implementation, one per line:
+
+```text META-INF/services/org.jetbrains.java.decompiler.api.plugin.Plugin
+org.example.myplugin.MyPlugin
+```
+
+At runtime, `ServiceLoader.load(Plugin.class)` discovers every implementation visible on the class path or module path. The fat JAR (`vineflower.jar`) bundles the three first-party plugins as sub-JARs inside `META-INF/plugins/`; those are loaded automatically before the ServiceLoader scan of the application class path.
+
+<Note>
+  The slim JAR (`vineflower-slim.jar`) contains only the decompiler core — none of the bundled plugins. Use the fat JAR if you want Kotlin, variable-renaming, or IDEA `@NotNull` support out of the box.
+</Note>
+
+## Plugin lifecycle
+
+Every time a new `Decompiler` instance is created, Vineflower instantiates each discovered `Plugin` and calls its methods in the following order:
+
+<Steps>
+  <Step title="id() / description()">
+    Called immediately after construction. `id()` must return a **unique PascalCase string** across all loaded plugins — a collision causes a runtime error. `description()` is a one- or two-sentence summary shown by `--list-plugins`.
+  </Step>
+  <Step title="initialize()">
+    Called once after all plugins are constructed. Use this hook to wire up any state that depends on other plugins being present, or to register class-attribute readers via `ClassAttributeRegistry`.
+  </Step>
+  <Step title="beforeDecompile()">
+    Called just before decompilation starts on each invocation. Useful for resetting per-run state (counters, caches, etc.).
+  </Step>
+  <Step title="Decompilation">
+    Passes registered in `registerJavaPasses()` run on every method; language specs provided by `getLanguageSpec()` route matching classes to a dedicated writer.
+  </Step>
+  <Step title="close()">
+    Called after decompilation finishes and the context is cleared. Release resources such as file handles or network connections here.
+  </Step>
+</Steps>
+
+<Note>
+  `id()` must return a **PascalCase** string that is unique among all loaded plugins. Duplicate IDs cause an immediate runtime error. Examples from the bundled plugins: `"Kotlin"`, `"IdeaNotNull"`, `"VariableRenaming"`.
+</Note>
+
+## The four extension points
+
+The `Plugin` interface exposes four optional hooks beyond the lifecycle methods. All have default no-op / `null` implementations, so you only override what you need.
+
+<CardGroup cols={2}>
+  <Card title="registerJavaPasses(JavaPassRegistrar)" icon="code-branch">
+    Inject custom `Pass` or `ClassPass` implementations that run at precise points in the Java decompilation pipeline. Eight method-level locations and three class-level locations are available. See the [Pass System](/plugins/pass-system) page for details.
+  </Card>
+  <Card title="getLanguageSpec()" icon="language">
+    Return a `LanguageSpec` to teach Vineflower how to decompile a non-Java JVM language end-to-end: class detection, CFG parsing, and source writing. The Kotlin plugin uses this. See [Language Spec](/plugins/language-spec).
+  </Card>
+  <Card title="getPluginOptions()" icon="sliders">
+    Return a `PluginOptions` that contributes option keys and their defaults to Vineflower's global option map. These options are then accessible via `DecompilerContext.getProperty(key)` during decompilation.
+  </Card>
+  <Card title="getRenamingFactory()" icon="tag">
+    Return an `IVariableNamingFactory` to replace the default variable-naming strategy. The factory is called once per method to produce an `IVariableNameProvider`. The `VariableRenaming` bundled plugin provides `jad` and `tiny` strategies this way.
+  </Card>
+</CardGroup>
+
+## Where plugins fit in the pipeline
+
+```text
+ClassLoader / ServiceLoader
+        │
+        ▼
+  Plugin.initialize()
+        │
+        ▼
+  Plugin.beforeDecompile()
+        │
+  ┌─────┴──────────────────────────────────────────────┐
+  │             Per-class decompilation                 │
+  │                                                     │
+  │  LanguageChooser.isLanguage(StructClass)            │
+  │         │                 │                         │
+  │   false │           true  │                         │
+  │         ▼                 ▼                         │
+  │   Java pipeline     LanguageSpec pipeline           │
+  │   (Java passes      (custom GraphParser +           │
+  │    at 8 locations)   StatementWriter)               │
+  └─────────────────────────────────────────────────────┘
+        │
+        ▼
+  Plugin.close()
+```
+
+When a class is routed to the Java pipeline, each registered `Pass` fires at the matching `JavaPassLocation`. When a class matches a `LanguageSpec`'s `LanguageChooser`, the entire pipeline — CFG parsing, IR passes, and writing — is delegated to that spec.
+
+## Bundled plugins
+
+The following four plugins are bundled in the `vineflower.jar` fat JAR and are auto-discovered at startup. The Scala plugin is present in the source tree but is **not** wired into the main Gradle build by default.
+
+<CardGroup cols={2}>
+  <Card title="Kotlin" icon="k" href="/plugins/bundled-plugins#kotlin">
+    Detects Kotlin `@Metadata` annotations and decompiles matching classes back to idiomatic `.kt` source, restoring data classes, extension functions, object declarations, and more.
+  </Card>
+  <Card title="IdeaNotNull" icon="ban" href="/plugins/bundled-plugins#idea-not-null">
+    Removes the boilerplate `if (param == null) throw ...` code that IntelliJ IDEA inserts for `@NotNull`-annotated parameters and return values, producing cleaner output.
+  </Card>
+  <Card title="VariableRenaming" icon="pencil" href="/plugins/bundled-plugins#variable-renaming">
+    Replaces the default variable-naming strategy with JAD-style names or names sourced from a Tiny mapping file, improving readability of obfuscated code.
+  </Card>
+  <Card title="Scala (source only)" icon="s" href="/plugins/bundled-plugins#scala">
+    Stub plugin for Scala decompilation support. Present in the repository but not included in the default build; requires manual inclusion.
+  </Card>
+</CardGroup>

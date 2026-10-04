@@ -1,0 +1,302 @@
+---
+title: "Vineflower Public API Reference"
+sidebarTitle: "API Reference"
+description: "Complete reference for the Vineflower public API: the Decompiler builder, DecompilerInstance, and the underlying Fernflower engine class."
+---
+
+The Vineflower public API lives in the `org.jetbrains.java.decompiler.api` package and provides a fluent builder interface for configuring and running decompilation without touching internal engine classes. For most embedding use cases, `Decompiler.builder()` is the only entry point you need.
+
+## Package overview
+
+| Class / Interface | Role |
+|---|---|
+| `Decompiler` | Top-level API class; exposes `builder()` and the inner `Builder` |
+| `Decompiler.Builder` | Fluent builder that configures inputs, outputs, options, and logging |
+| `Decompiler` (instance) | Returned by `Builder.build()`; holds the configured engine, exposes `decompile()` |
+| `Fernflower` | Lower-level engine; used internally by `Decompiler`, also available directly |
+
+---
+
+## `Decompiler`
+
+`Decompiler` is a `final` class. You obtain an instance exclusively through its builder.
+
+```java Decompiler.java
+package org.jetbrains.java.decompiler.api;
+
+public final class Decompiler {
+  public void decompile() { ... }
+  public static Builder builder() { ... }
+}
+```
+
+### `decompile()`
+
+Runs the full decompilation pipeline for all configured inputs and writes results to the configured `IResultSaver`. Internally calls `Fernflower.decompileContext()` and guarantees that `clearContext()` is always called in a `finally` block, releasing all held resources.
+
+---
+
+## `Decompiler.Builder`
+
+The builder accumulates configuration before constructing the engine. Call `build()` once you have set at least one input and one output.
+
+<Note>
+`build()` throws `IllegalArgumentException` if no output (`saver`) or no input (`sources`) has been configured.
+</Note>
+
+### Builder methods
+
+<AccordionGroup>
+  <Accordion title="inputs(File... files)">
+    Adds one or more JAR files, ZIP archives, directories, or individual `.class` files as decompilation sources.
+
+    ```java
+    Decompiler.builder()
+        .inputs(new File("myapp.jar"))
+        .inputs(new File("classes/"))
+    ```
+
+    | Parameter | Type | Description |
+    |---|---|---|
+    | `files` | `File...` | JAR, ZIP, directory, or `.class` file paths |
+
+    **Returns** `Builder` (this) for chaining.
+  </Accordion>
+
+  <Accordion title="inputs(IContextSource... sources)">
+    Adds one or more custom context sources as decompilation inputs. Use this when your class data does not live on the filesystem (e.g. in-memory bytecode, network streams).
+
+    ```java
+    IContextSource mySource = new MyCustomContextSource();
+    Decompiler.builder()
+        .inputs(mySource)
+    ```
+
+    | Parameter | Type | Description |
+    |---|---|---|
+    | `sources` | `IContextSource...` | Custom class providers |
+
+    **Returns** `Builder` (this) for chaining.
+  </Accordion>
+
+  <Accordion title="libraries(File... files)">
+    Adds JAR files or directories to the type-resolution classpath. Library classes are read for type information but are **not** decompiled themselves.
+
+    ```java
+    .libraries(new File("rt.jar"), new File("guava.jar"))
+    ```
+
+    | Parameter | Type | Description |
+    |---|---|---|
+    | `files` | `File...` | JAR/directory classpath entries |
+
+    **Returns** `Builder` (this) for chaining.
+  </Accordion>
+
+  <Accordion title="libraries(IContextSource... sources)">
+    Adds custom context sources to the type-resolution classpath. Mirrors the `File`-based overload but accepts any `IContextSource` implementation.
+
+    | Parameter | Type | Description |
+    |---|---|---|
+    | `sources` | `IContextSource...` | Custom classpath providers |
+
+    **Returns** `Builder` (this) for chaining.
+  </Accordion>
+
+  <Accordion title="output(IResultSaver saver)">
+    Sets the output sink that receives decompiled source text. **Required** — `build()` will throw if this is not called.
+
+    ```java
+    .output(new PrintStreamSaver(System.out))
+    ```
+
+    | Parameter | Type | Description |
+    |---|---|---|
+    | `saver` | `IResultSaver` | Destination for decompiled output |
+
+    **Returns** `Builder` (this) for chaining.
+  </Accordion>
+
+  <Accordion title="logger(IFernflowerLogger logger)">
+    Sets a custom logger. If not called, the default `IFernflowerLogger.NO_OP` is used, which silently discards all messages.
+
+    ```java
+    .logger(new PrintStreamLogger(System.err))
+    ```
+
+    | Parameter | Type | Description |
+    |---|---|---|
+    | `logger` | `IFernflowerLogger` | Logging implementation |
+
+    **Returns** `Builder` (this) for chaining.
+  </Accordion>
+
+  <Accordion title="option(String key, Object value)">
+    Sets a single decompiler option by key. Boolean values (`true`/`false` or `Boolean`) are automatically normalised to `"1"` / `"0"`. Option keys are defined as constants in `IFernflowerPreferences`.
+
+    ```java
+    .option(IFernflowerPreferences.DECOMPILE_GENERIC_SIGNATURES, "1")
+    .option(IFernflowerPreferences.REMOVE_BRIDGE, true)
+    ```
+
+    | Parameter | Type | Description |
+    |---|---|---|
+    | `key` | `String` | Option name from `IFernflowerPreferences` |
+    | `value` | `Object` | Option value; `Boolean` is auto-converted |
+
+    **Returns** `Builder` (this) for chaining.
+  </Accordion>
+
+  <Accordion title="options(Object... pairs)">
+    Sets multiple options in a single call using an alternating key-value varargs list. The array length must be even; every even-indexed element is a `String` key, every odd-indexed element is the value.
+
+    ```java
+    .options(
+        IFernflowerPreferences.REMOVE_BRIDGE, true,
+        IFernflowerPreferences.DECOMPILE_GENERIC_SIGNATURES, "1"
+    )
+    ```
+
+    | Parameter | Type | Description |
+    |---|---|---|
+    | `pairs` | `Object...` | Alternating `String` key, value pairs |
+
+    Throws `IllegalArgumentException` if the count is odd or any key is not a `String`.
+
+    **Returns** `Builder` (this) for chaining.
+  </Accordion>
+
+  <Accordion title="allowedPrefixes(String... prefixes)">
+    Restricts decompilation to classes whose fully-qualified names start with one of the given prefixes. Classes that do not match any prefix are skipped. If no prefixes are added, all classes in the inputs are decompiled.
+
+    ```java
+    .allowedPrefixes("com/example/app/", "com/example/lib/")
+    ```
+
+    | Parameter | Type | Description |
+    |---|---|---|
+    | `prefixes` | `String...` | Internal class-name prefixes (slash-separated) |
+
+    **Returns** `Builder` (this) for chaining.
+  </Accordion>
+
+  <Accordion title="build()">
+    Validates the configuration and constructs the `Decompiler` instance. Creates a `Fernflower` engine, registers all sources and libraries, and applies all whitelist prefixes.
+
+    **Returns** `Decompiler` — ready to call `decompile()` on.
+
+    Throws `IllegalArgumentException` if `saver` is `null` or if no inputs were added.
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## `Fernflower` (engine class)
+
+`Fernflower` is the underlying decompilation engine. The `Decompiler` builder constructs and wraps it, but you can also instantiate it directly for advanced integrations such as tooling that predates the `Decompiler` API.
+
+```java Fernflower.java
+public class Fernflower implements IDecompiledData {
+  public Fernflower(IResultSaver saver,
+                    Map<String, Object> customProperties,
+                    IFernflowerLogger logger);
+
+  public void addSource(File source);
+  public void addSource(IContextSource source);
+  public void addLibrary(File library);
+  public void addLibrary(IContextSource library);
+  public void addWhitelist(String prefix);
+  public void decompileContext();
+  public void clearContext();
+}
+```
+
+<Warning>
+The four-argument constructor `Fernflower(IBytecodeProvider, IResultSaver, Map, IFernflowerLogger)` is `@Deprecated`. Pass `null` as the first argument or use the three-argument constructor instead. Prefer `Decompiler.builder()` for all new code.
+</Warning>
+
+| Method | Description |
+|---|---|
+| `addSource(File)` | Register a JAR/ZIP/directory/class file as a decompilation source |
+| `addSource(IContextSource)` | Register a custom context source |
+| `addLibrary(File)` | Add a classpath entry used for type resolution only |
+| `addLibrary(IContextSource)` | Add a custom classpath entry |
+| `addWhitelist(String)` | Restrict decompilation to classes matching this prefix |
+| `decompileContext()` | Run the full decompilation pipeline |
+| `clearContext()` | Release all decompiler state; always call after `decompileContext()` |
+
+---
+
+## End-to-end example
+
+The following example decompiles a JAR to a folder, using a standard console logger and two common options.
+
+```java DecompileExample.java
+import org.jetbrains.java.decompiler.api.Decompiler;
+import org.jetbrains.java.decompiler.main.decompiler.ConsoleDecompiler;
+import org.jetbrains.java.decompiler.main.extern.IFernflowerPreferences;
+import org.jetbrains.java.decompiler.main.extern.IFernflowerLogger;
+
+import java.io.File;
+
+public class DecompileExample {
+
+  public static void main(String[] args) {
+    File inputJar   = new File("myapp.jar");
+    File outputDir  = new File("decompiled/");
+    File runtimeJar = new File(System.getProperty("java.home") + "/lib/rt.jar");
+
+    // Build a folder-based result saver (ships with Vineflower)
+    var saver = new ConsoleDecompiler.FileSaver(outputDir);
+
+    Decompiler decompiler = Decompiler.builder()
+        .inputs(inputJar)
+        .libraries(runtimeJar)
+        .output(saver)
+        .logger(new IFernflowerLogger() {
+          @Override
+          public void writeMessage(String message, Severity severity) {
+            System.err.println("[" + severity.prefix + "] " + message);
+          }
+
+          @Override
+          public void writeMessage(String message, Severity severity, Throwable t) {
+            writeMessage(message + ": " + t.getMessage(), severity);
+          }
+        })
+        .option(IFernflowerPreferences.REMOVE_BRIDGE, true)
+        .option(IFernflowerPreferences.DECOMPILE_GENERIC_SIGNATURES, "1")
+        .build();
+
+    decompiler.decompile();
+  }
+}
+```
+
+### Filtering specific packages
+
+```java FilteredDecompile.java
+Decompiler decompiler = Decompiler.builder()
+    .inputs(new File("bigapp.jar"))
+    .output(saver)
+    .allowedPrefixes(
+        "com/example/payments/",
+        "com/example/auth/"
+    )
+    .build();
+
+decompiler.decompile();
+```
+
+### Custom in-memory input
+
+```java InMemoryDecompile.java
+IContextSource memSource = new MyInMemoryContextSource(bytecodeMap);
+
+Decompiler decompiler = Decompiler.builder()
+    .inputs(memSource)
+    .output(saver)
+    .build();
+
+decompiler.decompile();
+```

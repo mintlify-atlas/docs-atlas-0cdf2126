@@ -1,20 +1,79 @@
 ---
-title: "Introduction"
-description: "Welcome to your project"
+title: "Vineflower: Modern Java & JVM Decompiler"
+sidebarTitle: "Home"
+description: "Vineflower is a high-accuracy Java and JVM language decompiler that produces clean, readable source output. Fork of Fernflower with Java 21+ support and an extensible plugin API."
 ---
 
-Write a short description of your product here. What it does, who it's for, and what they can accomplish with it.
+Vineflower is a modern, general-purpose Java & JVM language decompiler focused on accuracy, output quality, and developer usability. It is a fork of JetBrains' Fernflower decompiler, building on the work of ForgeFlower, FabricMC's Fernflower fork, and Quiltflower — with significant enhancements for Java 21+ language features, multi-threaded decompilation, and an extensible plugin system.
 
-<Tip>
-  Ready to make this your own? Start by editing this page. Update your `docs.json` file to customize your site. Then fill out the [Quickstart](/quickstart) page.
-</Tip>
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Decompile your first JAR or class file in under a minute
+  </Card>
+  <Card title="CLI Reference" icon="terminal" href="/usage/cli">
+    Full command-line interface flags, options, and examples
+  </Card>
+  <Card title="Library API" icon="code" href="/usage/library">
+    Embed Vineflower programmatically in your Java project
+  </Card>
+  <Card title="Plugin System" icon="puzzle-piece" href="/plugins/overview">
+    Extend Vineflower with custom passes and language support
+  </Card>
+</CardGroup>
 
-<Card title="Quickstart" icon="rocket" href="/quickstart">
-  This card links to the quickstart page in your project.
-</Card>
-<Card title="Components" icon="puzzle-piece" href="https://mintlify.com/docs/components">
-  Add cards, callouts, steps, tabs, and more to design and structure your pages.
-</Card>
-<Card title="Settings" icon="gear" href="https://mintlify.com/docs/organize/settings">
-  Set your site name, branding, and navigation in the `docs.json` file.
-</Card>
+## What Vineflower Does
+
+Vineflower translates compiled JVM bytecode back into readable Java (and other JVM language) source. It handles the full range of modern Java constructs — records, sealed classes, switch expressions, pattern matching, and more — and produces consistently formatted output suitable for code review, analysis, or archival.
+
+<CardGroup cols={3}>
+  <Card title="Java 21+ Support" icon="java">
+    Records, sealed classes, switch expressions, and pattern matching decompile correctly
+  </Card>
+  <Card title="Multi-threaded" icon="bolt">
+    Parallel decompilation across all CPU cores for fast bulk processing
+  </Card>
+  <Card title="Plugin API" icon="plug">
+    Inject custom passes, support new JVM languages, or rename identifiers
+  </Card>
+  <Card title="CLI & Library" icon="layer-group">
+    Use as a standalone JAR or embed the API in your own tools
+  </Card>
+  <Card title="Kotlin & Scala" icon="circle-nodes">
+    Bundled plugins recover Kotlin and Scala source-level constructs
+  </Card>
+  <Card title="Configurable Output" icon="sliders">
+    Dozens of options to tune formatting, filtering, and error handling
+  </Card>
+</CardGroup>
+
+## Get Started
+
+<Steps>
+  <Step title="Download the JAR">
+    Grab the latest `vineflower.jar` from [GitHub Releases](https://github.com/Vineflower/vineflower/releases) or add the Maven dependency to your build.
+  </Step>
+  <Step title="Decompile a file">
+    Run the decompiler from the command line:
+    ```bash
+    java -jar vineflower.jar MyApp.jar ./decompiled/
+    ```
+  </Step>
+  <Step title="Explore the output">
+    Open the `./decompiled/` directory to browse the reconstructed source files.
+  </Step>
+  <Step title="Tune the options">
+    Adjust [decompiler options](/usage/options) to control formatting, feature recovery, and more.
+  </Step>
+</Steps>
+
+## Heritage
+
+Vineflower stands on the shoulders of several prior projects:
+
+| Project | Role |
+|---|---|
+| JetBrains Fernflower | Original decompiler — Apache 2.0 |
+| MinecraftForge ForgeFlower | Community fixes and improvements |
+| FabricMC Fernflower | Further accuracy improvements |
+| Quiltflower | Significant quality and API enhancements |
+| **Vineflower** | **Current active fork — modern Java, plugin API, clean output** |

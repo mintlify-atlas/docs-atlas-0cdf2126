@@ -1,0 +1,462 @@
+---
+title: "Vineflower Extension Interfaces Reference"
+sidebarTitle: "Interfaces"
+description: "Reference for every public extension interface in Vineflower: IResultSaver, IFernflowerLogger, IContextSource, IIdentifierRenamer, IVariableNamingFactory, TextTokenVisitor, and more."
+---
+
+Vineflower exposes a set of public interfaces — primarily in `org.jetbrains.java.decompiler.main.extern` and `org.jetbrains.java.decompiler.api` — that let you control inputs, outputs, logging, identifier renaming, variable naming, and token inspection without touching internal classes. Implement the interface(s) relevant to your use case and wire them into `Decompiler.builder()` or a `Plugin`.
+
+---
+
+## `IResultSaver`
+
+`IResultSaver` is the primary output interface. Every byte of decompiled source passes through it. Implement this interface to write output to any destination — a folder, an archive, a database, or an in-memory buffer.
+
+`IResultSaver` extends `AutoCloseable`, so it participates in try-with-resources and receives a `close()` call when the decompiler finishes.
+
+<Accordion title="Interface declaration and method signatures">
+```java IResultSaver.java
+package org.jetbrains.java.decompiler.main.extern;
+
+public interface IResultSaver extends AutoCloseable {
+
+  /** Called to create/open an output folder. */
+  void saveFolder(String path);
+
+  /** Copies a non-class file from source path to the output. */
+  void copyFile(String source, String path, String entryName);
+
+  /** Writes a decompiled class file. mapping is a flat (inputLine, outputLine) array. */
+  void saveClassFile(String path, String qualifiedName, String entryName,
+                     String content, int[] mapping);
+
+  /** Opens a new ZIP/JAR archive in the output. */
+  void createArchive(String path, String archiveName, Manifest manifest);
+
+  /** Writes a directory entry inside an archive. */
+  void saveDirEntry(String path, String archiveName, String entryName);
+
+  /** Copies a non-class entry from source archive into the output archive. */
+  void copyEntry(String source, String path, String archiveName, String entry);
+
+  /** Writes a decompiled class into an archive. */
+  void saveClassEntry(String path, String archiveName, String qualifiedName,
+                      String entryName, String content);
+
+  /** Variant of saveClassEntry that also receives the source-map. */
+  default void saveClassEntry(String path, String archiveName, String qualifiedName,
+                               String entryName, String content, int[] mapping) {
+    saveClassEntry(path, archiveName, qualifiedName, entryName, content);
+  }
+
+  /** Closes an archive previously opened with createArchive. */
+  void closeArchive(String path, String archiveName);
+
+  /** AutoCloseable lifecycle hook — override to release resources. */
+  default void close() throws IOException {}
+
+  /** Utility: encodes a line-mapping int[] as ZIP extra-field bytes (ForgeFlower format). */
+  default byte[] getCodeLineData(int[] mappings) { ... }
+}
+```
+</Accordion>
+
+<Tip>
+When decompiling loose class files or directories, Vineflower calls `saveFolder` / `saveClassFile` / `copyFile`. When decompiling JARs, it calls `createArchive` / `saveClassEntry` / `copyEntry` / `closeArchive`. Your implementation must handle both call patterns if it will receive both kinds of inputs.
+</Tip>
+
+### Key method details
+
+| Method | When called | Notes |
+|---|---|---|
+| `saveFolder(path)` | Before writing loose files into a directory | `path` is the destination directory |
+| `saveClassFile(...)` | Each decompiled class in a folder output | `mapping` is `null` when bytecode source mapping (`-bsm`) is disabled |
+| `createArchive(...)` | Before writing any entry into a JAR/ZIP | Receives the original `Manifest` |
+| `saveClassEntry(...)` | Each decompiled class inside an archive | 6-arg overload adds the line `mapping` |
+| `copyEntry(...)` | Non-class resources inside a source JAR | Should be reproduced verbatim |
+| `closeArchive(...)` | After all entries for an archive are written | Flush and close the archive here |
+
+---
+
+## `IFernflowerLogger`
+
+`IFernflowerLogger` is an abstract class (not an interface) that you subclass to receive structured diagnostic messages from the decompiler engine. A no-op singleton `IFernflowerLogger.NO_OP` is available as the default.
+
+<Accordion title="Class declaration and method signatures">
+```java IFernflowerLogger.java
+package org.jetbrains.java.decompiler.main.extern;
+
+public abstract class IFernflowerLogger {
+
+  public static final IFernflowerLogger NO_OP = /* no-op singleton */;
+
+  public enum Severity {
+    TRACE("TRACE: "), INFO("INFO:  "), WARN("WARN:  "), ERROR("ERROR: ");
+    public final String prefix;
+  }
+
+  // --- Core abstract methods ---
+
+  /** Write a plain diagnostic message at the given severity. */
+  public abstract void writeMessage(String message, Severity severity);
+
+  /** Write a diagnostic message associated with a Throwable. */
+  public abstract void writeMessage(String message, Severity severity, Throwable t);
+
+  // --- Convenience ---
+
+  /** Shortcut: writeMessage at ERROR level with a Throwable. */
+  public void writeMessage(String message, Throwable t) { ... }
+
+  // --- Severity filter ---
+
+  /** Returns true if this logger accepts the given severity (default threshold: INFO). */
+  public boolean accepts(Severity severity) { ... }
+
+  public void setSeverity(Severity severity) { ... }
+
+  // --- Lifecycle hooks (no-op by default, override as needed) ---
+
+  public void startProcessingClass(String className) {}
+  public void endProcessingClass() {}
+  public void startReadingClass(String className) {}
+  public void endReadingClass() {}
+  public void startClass(String className) {}
+  public void endClass() {}
+  public void startMethod(String methodName) {}
+  public void endMethod() {}
+  public void startWriteClass(String className) {}
+  public void endWriteClass() {}
+}
+```
+</Accordion>
+
+### Severity levels
+
+| Level | Ordinal | Meaning |
+|---|---|---|
+| `TRACE` | 0 | Very verbose — internal state changes |
+| `INFO` | 1 | Normal progress messages (default threshold) |
+| `WARN` | 2 | Non-fatal issues such as missing debug info |
+| `ERROR` | 3 | Decompilation failures for a class or method |
+
+### Lifecycle hooks
+
+Override the lifecycle hook methods to track per-class or per-method progress without parsing message strings:
+
+```java MyLogger.java
+public class MyLogger extends IFernflowerLogger {
+  @Override
+  public void writeMessage(String message, Severity severity) {
+    System.err.printf("[%s] %s%n", severity.prefix, message);
+  }
+
+  @Override
+  public void writeMessage(String message, Severity severity, Throwable t) {
+    writeMessage(message + " — " + t.getMessage(), severity);
+  }
+
+  @Override
+  public void startProcessingClass(String className) {
+    System.err.println("Decompiling: " + className);
+  }
+}
+```
+
+---
+
+## `IContextSource`
+
+`IContextSource` is the universal interface for supplying class bytes to Vineflower. It replaces the deprecated `IBytecodeProvider`. Implement it to back the decompiler with anything — an in-memory map, a remote store, a custom archive format.
+
+<Accordion title="Interface declaration and nested types">
+```java IContextSource.java
+package org.jetbrains.java.decompiler.main.extern;
+
+public interface IContextSource {
+  static String CLASS_SUFFIX = ".class";
+
+  /** A human-readable name for this source (used in log messages). */
+  String getName();
+
+  /** Returns the full list of entries in this context. */
+  Entries getEntries();
+
+  /**
+   * Whether this source is lazy — may return Entries.EMPTY from getEntries().
+   * Only valid for library sources; has no effect on input sources.
+   */
+  default boolean isLazy() { return false; }
+
+  /** Check whether a class exists (class name without .class suffix). */
+  default boolean hasClass(String className) throws IOException { ... }
+
+  /** Return raw bytes for a class, or null if absent. */
+  default byte[] getClassBytes(String className) throws IOException { ... }
+
+  /** Return an InputStream for a specific Entry, or null for a directory. */
+  default InputStream getInputStream(Entry resource) throws IOException { ... }
+
+  /** Return an InputStream for a path string, or null for a directory. */
+  InputStream getInputStream(String resource) throws IOException;
+
+  /**
+   * Optional: create an output sink that knows how to write results for
+   * entries from this source. Return null to use the global IResultSaver.
+   */
+  default /* @Nullable */ IOutputSink createOutputSink(IResultSaver saver) {
+    return null;
+  }
+
+  // --- Nested types ---
+
+  interface IOutputSink extends AutoCloseable {
+    void begin();
+    void acceptClass(String qualifiedName, String fileName,
+                     String content, int[] mapping);
+    void acceptDirectory(String directory);
+    void acceptOther(String path);
+    void close() throws IOException;
+  }
+
+  final class Entries {
+    public static final Entries EMPTY = new Entries(List.of(), List.of(), List.of(), List.of());
+
+    public Entries(List<Entry> classes, List<String> directories,
+                   List<Entry> others);
+    public Entries(List<Entry> classes, List<String> directories,
+                   List<Entry> others, List<IContextSource> childContexts);
+
+    public List<Entry> classes();
+    public List<String> directories();
+    public List<Entry> others();
+    public List<IContextSource> childContexts();
+  }
+
+  final class Entry {
+    public static final int BASE_VERSION = -1;
+
+    public static Entry parse(String path);   // parses META-INF/versions/NN/ prefix
+    public static Entry atBase(String path);  // always BASE_VERSION
+
+    public Entry(String basePath, int multirelease); // multirelease must be >= 9 or -1
+
+    public String basePath();
+    public int    multirelease();
+    public String path();  // reconstructs full path with META-INF/versions/ prefix if needed
+  }
+}
+```
+</Accordion>
+
+### Implementing a minimal `IContextSource`
+
+```java InMemoryContextSource.java
+import org.jetbrains.java.decompiler.main.extern.IContextSource;
+import java.io.ByteArrayInputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.util.List;
+import java.util.Map;
+
+public class InMemoryContextSource implements IContextSource {
+  private final Map<String, byte[]> classes; // "com/example/Foo" -> bytecode
+
+  public InMemoryContextSource(Map<String, byte[]> classes) {
+    this.classes = Map.copyOf(classes);
+  }
+
+  @Override
+  public String getName() { return "in-memory"; }
+
+  @Override
+  public Entries getEntries() {
+    List<Entry> entries = classes.keySet().stream()
+        .map(name -> Entry.atBase(name + CLASS_SUFFIX))
+        .toList();
+    return new Entries(entries, List.of(), List.of());
+  }
+
+  @Override
+  public InputStream getInputStream(String resource) throws IOException {
+    String className = resource.endsWith(CLASS_SUFFIX)
+        ? resource.substring(0, resource.length() - CLASS_SUFFIX.length())
+        : resource;
+    byte[] bytes = classes.get(className);
+    return bytes == null ? null : new ByteArrayInputStream(bytes);
+  }
+}
+```
+
+### `Entry` and multi-release JARs
+
+`Entry.parse(path)` automatically detects `META-INF/versions/<N>/` paths and sets the `multirelease` field to the target Java version. Use `Entry.atBase(path)` when you know the path is not a multi-release variant.
+
+---
+
+## `IIdentifierRenamer`
+
+`IIdentifierRenamer` controls the name-remapping pass that fires when the `rename_entities` option is enabled. Vineflower calls `toBeRenamed` for each element and, if it returns `true`, calls the appropriate `getNext*Name` method to obtain the replacement name.
+
+<Accordion title="Interface declaration">
+```java IIdentifierRenamer.java
+package org.jetbrains.java.decompiler.main.extern;
+
+public interface IIdentifierRenamer {
+
+  enum Type { ELEMENT_CLASS, ELEMENT_FIELD, ELEMENT_METHOD }
+
+  /**
+   * Returns true if this element should be renamed.
+   *
+   * @param elementType  class, field, or method
+   * @param className    the containing class's internal name
+   * @param element      the element's simple name
+   * @param descriptor   the element's descriptor string
+   */
+  boolean toBeRenamed(Type elementType, String className,
+                      String element, String descriptor);
+
+  /** Provides the new class name given the full and short original names. */
+  String getNextClassName(String fullName, String shortName);
+
+  /** Provides a new field name. */
+  String getNextFieldName(String className, String field, String descriptor);
+
+  /** Provides a new method name. */
+  String getNextMethodName(String className, String method, String descriptor);
+}
+```
+</Accordion>
+
+<Note>
+Wire your `IIdentifierRenamer` implementation by setting the `IFernflowerPreferences.USER_RENAMER_CLASS` option to the fully-qualified class name of your implementation, and enable renaming with `IFernflowerPreferences.RENAME_ENTITIES = "1"`.
+</Note>
+
+---
+
+## `IVariableNamingFactory` and `IVariableNameProvider`
+
+These two interfaces work together to supply custom variable names. The factory is discovered through the plugin system; the provider is created per-method.
+
+<Accordion title="IVariableNamingFactory">
+```java IVariableNamingFactory.java
+package org.jetbrains.java.decompiler.main.extern;
+
+public interface IVariableNamingFactory {
+  @NotNull
+  IVariableNameProvider createFactory(StructMethod structMethod);
+}
+```
+
+Implement `IVariableNamingFactory` in your `Plugin.getRenamingFactory()` method. Vineflower calls `createFactory` once per method to obtain a stateful `IVariableNameProvider`.
+</Accordion>
+
+<Accordion title="IVariableNameProvider">
+```java IVariableNameProvider.java
+package org.jetbrains.java.decompiler.main.extern;
+
+public interface IVariableNameProvider {
+
+  /**
+   * Given a map of (VarVersionPair -> (VarType, suggestedName)),
+   * return a map of (VarVersionPair -> finalName).
+   * Variables absent from the returned map keep their suggested name.
+   */
+  Map<VarVersionPair, String> rename(
+      Map<VarVersionPair, Pair<VarType, String>> variables);
+
+  /** Rename a parameter on an abstract or native method. */
+  default String renameAbstractParameter(String name, int index) { return name; }
+
+  /**
+   * Rename a parameter, delegating to renameAbstractParameter for
+   * abstract/native methods.
+   */
+  default String renameParameter(int flags, VarType type, String name, int index) { ... }
+
+  /** Receive the parent scope's provider for context-aware naming. */
+  void addParentContext(IVariableNameProvider renamer);
+}
+```
+</Accordion>
+
+---
+
+## `TextTokenVisitor`
+
+`TextTokenVisitor` is an abstract class that lets you inspect and annotate every semantic token in the generated source text — classes, fields, methods, parameters, and local variables. Visitors are chained; each visitor calls through to the `next` visitor it was constructed with.
+
+<Accordion title="Class declaration and visit methods">
+```java TextTokenVisitor.java
+package org.jetbrains.java.decompiler.main.extern;
+
+public abstract class TextTokenVisitor {
+
+  public static final TextTokenVisitor EMPTY = /* terminal no-op */;
+
+  // --- Visitor lifecycle ---
+
+  /** Called once with the full generated source string before token visits. */
+  public void start(String content) { ... }
+
+  /** Called once after all tokens have been visited. */
+  public void end() { ... }
+
+  // --- Token visit methods ---
+
+  public void visitClass(TextRange range, boolean declaration, String name) { ... }
+
+  public void visitField(TextRange range, boolean declaration,
+                         String className, String name, FieldDescriptor descriptor) { ... }
+
+  public void visitMethod(TextRange range, boolean declaration,
+                          String className, String name, MethodDescriptor descriptor) { ... }
+
+  public void visitParameter(TextRange range, boolean declaration,
+                             String className, String methodName,
+                             MethodDescriptor methodDescriptor, int index, String name) { ... }
+
+  public void visitLocal(TextRange range, boolean declaration,
+                         String className, String methodName,
+                         MethodDescriptor methodDescriptor, int index, String name) { ... }
+
+  // --- Static registration ---
+
+  /** Register a factory that will be wired into each decompilation run. */
+  public static void addVisitor(Factory factory) { ... }
+
+  public static TextTokenVisitor createVisitor() { ... }
+  public static TextTokenVisitor createVisitor(Factory factory) { ... }
+
+  // --- Factory interface ---
+
+  public interface Factory {
+    TextTokenVisitor create(TextTokenVisitor next);
+    default Factory andThen(Factory after) { ... }
+  }
+}
+```
+</Accordion>
+
+<Tip>
+Use `TextTokenVisitor` to build IDE-style "jump to definition" maps or to generate LSIF/LSP hover data from decompiled output. Each `visitClass` / `visitMethod` call receives both declaration sites and reference sites (controlled by the `declaration` boolean).
+</Tip>
+
+---
+
+## `IBytecodeProvider` (deprecated)
+
+`IBytecodeProvider` is the original pre-`IContextSource` interface for supplying raw class bytes. It is retained for backward compatibility only.
+
+```java IBytecodeProvider.java
+/** @deprecated use IContextSource instead */
+@Deprecated
+public interface IBytecodeProvider {
+  byte[] getBytecode(String externalPath, String internalPath) throws IOException;
+}
+```
+
+<Warning>
+Do not implement `IBytecodeProvider` in new code. Migrate to `IContextSource`, which supports multi-release JARs, lazy loading, and custom output sinks.
+</Warning>

@@ -1,0 +1,246 @@
+---
+title: "Installing Vineflower: JAR, Gradle, and Maven"
+sidebarTitle: "Installation"
+description: "Install Vineflower as a standalone executable JAR, a Gradle dependency, or a Maven dependency — with notes on JAR variants and Java version requirements."
+---
+
+Vineflower is distributed through two channels: pre-built JAR files on GitHub Releases (for command-line use) and Maven Central (for embedding in JVM projects). Both channels publish every release simultaneously. This page covers all supported installation methods, explains the difference between the fat and slim JAR artifacts, documents Java version requirements by release series, and shows how to build Vineflower from source.
+
+## Java Version Requirements
+
+The JVM running Vineflower must meet the minimum version for the release series you choose. This requirement is independent of the Java version of the bytecode being decompiled.
+
+| Vineflower release series | Minimum JVM version |
+|---|---|
+| 1.9.x | Java 11 |
+| 1.10.x | Java 11 |
+| 1.11.x | Java 17 |
+| 1.12.x *(current)* | Java 17 |
+
+<Warning>
+  Attempting to run Vineflower 1.11+ on Java 11 or 16 will fail at startup with an `UnsupportedClassVersionError`. Make sure `java -version` reports at least Java 17 before proceeding.
+</Warning>
+
+---
+
+## Method 1 — Standalone JAR (CLI)
+
+<Tabs>
+  <Tab title="CLI Installation">
+    Download the latest release from the [GitHub Releases page](https://github.com/Vineflower/vineflower/releases). Two JAR variants are published with each release:
+
+    ### JAR variants
+
+    | Artifact | Contents | Recommended for |
+    |---|---|---|
+    | `vineflower.jar` | Vineflower core + all bundled plugins | **Most users — use this one** |
+    | `vineflower-slim.jar` | Vineflower core only (no bundled plugins) | Advanced users managing plugins manually |
+
+    <Note>
+      The fat JAR (`vineflower.jar`) bundles the official Kotlin, Scala, IDEA Not-Null, and Variable Renaming plugins inside `META-INF/plugins/`. The slim JAR (`vineflower-slim.jar`) contains only the core engine, which is sufficient if you do not need JVM language support beyond Java.
+    </Note>
+
+    ### Running the downloaded JAR
+
+    Once downloaded, Vineflower requires no installation. Run it directly with:
+
+    ```bash
+    java -jar vineflower.jar <source> <destination>
+    ```
+
+    **Examples:**
+
+    ```bash
+    # Decompile a JAR to a directory
+    java -jar vineflower.jar MyApp.jar ./output/
+
+    # Decompile a single class file to the console
+    java -jar vineflower.jar MyClass.class
+
+    # Decompile with options
+    java -jar vineflower.jar --decompile-generics=1 MyApp.jar ./output/
+
+    # Print the full option reference
+    java -jar vineflower.jar --help
+
+    # List bundled plugins
+    java -jar vineflower.jar --list-plugins
+    ```
+
+    The general invocation signature is:
+
+    ```
+    java -jar vineflower.jar --<option>=<value>... <source>... <destination>
+    ```
+
+    <Tip>
+      Set the `JAVA_TOOL_OPTIONS` environment variable or use a shell wrapper script to avoid retyping common flags on every invocation.
+    </Tip>
+  </Tab>
+  <Tab title="Library Installation">
+    If you intend to use Vineflower as a library inside your own application rather than as a CLI tool, use Method 2 (Gradle) or Method 3 (Maven) below. The Maven Central artifacts are the canonical distribution for library use and receive the same releases as the GitHub JAR downloads.
+  </Tab>
+</Tabs>
+
+---
+
+## Method 2 — Gradle Dependency
+
+Add Vineflower to your Gradle project by declaring it as a dependency. Replace `1.12.0` with the version you want to pin.
+
+<CodeGroup>
+  ```groovy build.gradle (Groovy DSL)
+  repositories {
+      mavenCentral()
+  }
+
+  dependencies {
+      implementation 'org.vineflower:vineflower:1.12.0'
+  }
+  ```
+
+  ```kotlin build.gradle.kts (Kotlin DSL)
+  repositories {
+      mavenCentral()
+  }
+
+  dependencies {
+      implementation("org.vineflower:vineflower:1.12.0")
+  }
+  ```
+
+  ```xml pom.xml (Maven)
+  <dependency>
+      <groupId>org.vineflower</groupId>
+      <artifactId>vineflower</artifactId>
+      <version>1.12.0</version>
+  </dependency>
+  ```
+</CodeGroup>
+
+<Note>
+  The Maven Central artifact `org.vineflower:vineflower` corresponds to the **slim JAR** (core engine only, no bundled plugins). If you need the Kotlin or Scala language plugins at runtime, include the fat JAR or add the plugin subproject artifacts explicitly.
+</Note>
+
+### Available Maven Central artifacts
+
+Each release publishes the following artifacts under `org.vineflower:vineflower:<version>`:
+
+| Classifier | Description |
+|---|---|
+| *(none)* | Slim JAR — core engine only |
+| *(fat, no classifier)* | Fat JAR — core + bundled plugins (the `allJar` artifact) |
+| `sources` | Source JAR |
+| `javadoc` | Javadoc JAR |
+
+---
+
+## Method 3 — Maven Dependency
+
+<CodeGroup>
+  ```xml pom.xml
+  <dependencies>
+      <dependency>
+          <groupId>org.vineflower</groupId>
+          <artifactId>vineflower</artifactId>
+          <version>1.12.0</version>
+      </dependency>
+  </dependencies>
+
+  <repositories>
+      <!-- Maven Central is the default; no extra repository entry needed -->
+  </repositories>
+  ```
+</CodeGroup>
+
+To use the Javadoc or sources JARs in your IDE, add the corresponding dependency entries:
+
+```xml pom.xml (optional sources + javadoc)
+<dependency>
+    <groupId>org.vineflower</groupId>
+    <artifactId>vineflower</artifactId>
+    <version>1.12.0</version>
+    <classifier>sources</classifier>
+</dependency>
+
+<dependency>
+    <groupId>org.vineflower</groupId>
+    <artifactId>vineflower</artifactId>
+    <version>1.12.0</version>
+    <classifier>javadoc</classifier>
+</dependency>
+```
+
+---
+
+## Method 4 — Build from Source
+
+If you need a bleeding-edge build or want to contribute, you can build Vineflower directly from the repository.
+
+<Steps>
+  <Step title="Clone the repository">
+    ```bash
+    git clone https://github.com/Vineflower/vineflower.git
+    cd vineflower
+    ```
+  </Step>
+  <Step title="Build with Gradle">
+    ```bash
+    ./gradlew build
+    ```
+
+    The build produces two JARs in `build/libs/`:
+
+    ```
+    build/libs/vineflower-<version>+local.jar       # fat JAR with plugins
+    build/libs/vineflower-<version>+local-slim.jar  # slim JAR, core only
+    ```
+
+    The `+local` suffix is appended automatically when building outside of GitHub Actions to distinguish local builds from release artifacts.
+  </Step>
+  <Step title="Run the local build">
+    ```bash
+    java -jar build/libs/vineflower-1.12.0+local.jar --help
+    ```
+  </Step>
+</Steps>
+
+<Info>
+  When targeting the latest development code, pull requests should be submitted against the `develop/1.xx.y` branch rather than `main`. See the [contributing guide](https://vineflower.org/development/) for full setup instructions.
+</Info>
+
+---
+
+## Verify the Installation
+
+Regardless of the installation method, confirm everything is working by printing the version:
+
+```bash
+java -jar vineflower.jar --help
+```
+
+Or, from a library integration, the version string is embedded in the JAR manifest under `Implementation-Version` and can be read at runtime via:
+
+```java VersionCheck.java
+String version = ConsoleDecompiler.class.getPackage().getImplementationVersion();
+System.out.println("Vineflower " + version);
+```
+
+---
+
+## Summary
+
+<CardGroup cols={2}>
+  <Card title="Standalone JAR" icon="file-archive">
+    Download `vineflower.jar` from GitHub Releases and run with `java -jar`. No installation needed — the fat JAR is self-contained with all plugins included.
+  </Card>
+  <Card title="Gradle / Maven" icon="box">
+    Add `org.vineflower:vineflower:1.12.0` from Maven Central. Use the slim JAR artifact for library integration; add plugin artifacts separately as needed.
+  </Card>
+  <Card title="Build from Source" icon="hammer">
+    Clone the repo and run `./gradlew build`. Produces both the fat JAR and the slim JAR in `build/libs/`.
+  </Card>
+  <Card title="IDE Plugin" icon="lightbulb">
+    For IntelliJ IDEA users, the [Vineflower IntelliJ plugin](https://plugins.jetbrains.com/plugin/18032-quiltflower) replaces the built-in Fernflower decompiler with Vineflower automatically.
+  </Card>
+</CardGroup>

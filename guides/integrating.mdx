@@ -1,0 +1,328 @@
+---
+title: "Integrating Vineflower into a Build Tool or IDE"
+sidebarTitle: "Integration"
+description: "Learn how to embed Vineflower programmatically into IDE plugins, Gradle tasks, analysis pipelines, and CI workflows using the Java API."
+---
+
+Vineflower ships a clean Java API that lets you embed the decompiler directly into your own tooling — whether that's an IDE plugin that decompiles attached sources on the fly, a Gradle task that produces human-readable output as part of a build, a static-analysis tool that inspects bytecode structure, or a CI check that ensures decompiled output meets a quality bar. This guide walks through each integration pattern, using only the public API types exposed under `org.jetbrains.java.decompiler.api` and `org.jetbrains.java.decompiler.main.extern`.
+
+## Adding the Dependency
+
+Vineflower is published to Maven Central under the `org.vineflower` group. Add it to your project's build file:
+
+<CodeGroup>
+```groovy build.gradle
+dependencies {
+    implementation 'org.vineflower:vineflower:1.12.0'
+}
+```
+
+```kotlin build.gradle.kts
+dependencies {
+    implementation("org.vineflower:vineflower:1.12.0")
+}
+```
+
+```xml pom.xml
+<dependency>
+    <groupId>org.vineflower</groupId>
+    <artifactId>vineflower</artifactId>
+    <version>1.12.0</version>
+</dependency>
+```
+</CodeGroup>
+
+<Note>
+Vineflower 1.11 and later require **Java 17 or higher** as the host JVM. The decompiler can still process class files targeting older Java versions.
+</Note>
+
+## The Core Builder API
+
+All programmatic use starts with `Decompiler.builder()`. The builder follows a fluent style — you supply at least one input, an output handler (`IResultSaver`), and any options, then call `build()` to obtain a `Decompiler` instance ready to run.
+
+```java DecompilerUsage.java
+import org.jetbrains.java.decompiler.api.Decompiler;
+import org.jetbrains.java.decompiler.main.extern.IFernflowerPreferences;
+
+import java.io.File;
+
+// Minimal usage: decompile a JAR to a directory
+Decompiler decompiler = Decompiler.builder()
+    .inputs(new File("MyLibrary.jar"))
+    .output(new FolderResultSaver(new File("output/")))
+    .option(IFernflowerPreferences.DECOMPILE_GENERIC_SIGNATURES, "1")
+    .logger(new PrintingLogger())
+    .build();
+
+decompiler.decompile();
+```
+
+## Step-by-Step: A Gradle Task that Decompiles a JAR
+
+The following example creates a custom Gradle task that drives Vineflower programmatically. It wires together an `IResultSaver` that writes `.java` files into a target directory and an `IFernflowerLogger` that forwards messages to the Gradle logger.
+
+<Steps>
+
+### Add the Vineflower dependency to your build script
+
+```groovy build.gradle
+plugins {
+    id 'java'
+}
+
+configurations {
+    decompiler
+}
+
+dependencies {
+    decompiler 'org.vineflower:vineflower:1.12.0'
+}
+```
+
+### Implement a folder-based `IResultSaver`
+
+`IResultSaver` is the interface Vineflower calls whenever it has finished decompiling a class. For a simple folder layout, only `saveFolder` and `saveClassFile` need real implementations; the archive methods can be left as no-ops unless your input is a JAR/ZIP.
+
+```java FolderResultSaver.java
+import org.jetbrains.java.decompiler.main.extern.IResultSaver;
+
+import java.io.*;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.*;
+import java.util.jar.Manifest;
+
+public class FolderResultSaver implements IResultSaver {
+    private final File root;
+
+    public FolderResultSaver(File root) {
+        this.root = root;
+    }
+
+    @Override
+    public void saveFolder(String path) {
+        new File(root, path).mkdirs();
+    }
+
+    @Override
+    public void saveClassFile(String path, String qualifiedName,
+                              String entryName, String content, int[] mapping) {
+        File target = new File(new File(root, path), entryName);
+        target.getParentFile().mkdirs();
+        try (Writer w = new OutputStreamWriter(
+                new FileOutputStream(target), StandardCharsets.UTF_8)) {
+            w.write(content);
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+    }
+
+    // Archive methods — not needed for folder output
+    @Override public void createArchive(String path, String archiveName, Manifest manifest) {}
+    @Override public void saveDirEntry(String path, String archiveName, String entryName) {}
+    @Override public void copyEntry(String source, String path, String archiveName, String entry) {}
+    @Override public void saveClassEntry(String path, String archiveName,
+                                          String qualifiedName, String entryName, String content) {}
+    @Override public void closeArchive(String path, String archiveName) {}
+    @Override public void copyFile(String source, String path, String entryName) {}
+}
+```
+
+### Implement a logger that forwards to Gradle
+
+```java GradleLogger.java
+import org.gradle.api.logging.Logger;
+import org.jetbrains.java.decompiler.main.extern.IFernflowerLogger;
+
+public class GradleLogger extends IFernflowerLogger {
+    private final Logger gradle;
+
+    public GradleLogger(Logger gradle) {
+        this.gradle = gradle;
+    }
+
+    @Override
+    public void writeMessage(String message, Severity severity) {
+        switch (severity) {
+            case ERROR -> gradle.error(message);
+            case WARN  -> gradle.warn(message);
+            case INFO  -> gradle.info(message);
+            case TRACE -> gradle.debug(message);
+        }
+    }
+
+    @Override
+    public void writeMessage(String message, Severity severity, Throwable t) {
+        gradle.error(message, t);
+    }
+}
+```
+
+### Register the task
+
+```groovy build.gradle
+import org.jetbrains.java.decompiler.api.Decompiler
+import org.jetbrains.java.decompiler.main.extern.IFernflowerPreferences
+
+tasks.register('decompileJar') {
+    group = 'decompilation'
+    description = 'Decompiles the project JAR with Vineflower.'
+
+    dependsOn jar
+    inputs.file(jar.archiveFile)
+    outputs.dir(layout.buildDirectory.dir('decompiled'))
+
+    doLast {
+        File jarFile    = jar.archiveFile.get().asFile
+        File outputDir  = layout.buildDirectory.dir('decompiled').get().asFile
+        outputDir.mkdirs()
+
+        Decompiler decompiler = Decompiler.builder()
+            .inputs(jarFile)
+            .output(new FolderResultSaver(outputDir))
+            .option(IFernflowerPreferences.THREADS, "4")
+            .option(IFernflowerPreferences.DUMP_BYTECODE_ON_ERROR, "1")
+            .logger(new GradleLogger(logger))
+            .build()
+
+        decompiler.decompile()
+    }
+}
+```
+
+</Steps>
+
+## Providing Multiple Input Sources with `IContextSource`
+
+For scenarios where your classes do not live on disk — for example, classes generated in memory or fetched from a remote store — implement `IContextSource` instead of passing a `File`. The interface requires you to list your entries and provide an `InputStream` for each one.
+
+```java InMemoryContextSource.java
+import org.jetbrains.java.decompiler.main.extern.IContextSource;
+
+import java.io.ByteArrayInputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.util.List;
+import java.util.Map;
+
+public class InMemoryContextSource implements IContextSource {
+    private final String name;
+    // Map from "com/example/Foo" (no .class suffix) to raw class bytes
+    private final Map<String, byte[]> classes;
+
+    public InMemoryContextSource(String name, Map<String, byte[]> classes) {
+        this.name = name;
+        this.classes = classes;
+    }
+
+    @Override
+    public String getName() { return name; }
+
+    @Override
+    public Entries getEntries() {
+        List<Entry> entries = classes.keySet().stream()
+            .map(Entry::atBase)
+            .toList();
+        return new Entries(entries, List.of(), List.of());
+    }
+
+    @Override
+    public InputStream getInputStream(String resource) throws IOException {
+        // Strip .class suffix that Vineflower appends when requesting bytes
+        String key = resource.endsWith(CLASS_SUFFIX)
+            ? resource.substring(0, resource.length() - CLASS_SUFFIX.length())
+            : resource;
+        byte[] bytes = classes.get(key);
+        return bytes == null ? null : new ByteArrayInputStream(bytes);
+    }
+}
+```
+
+Pass it through the builder just like a file:
+
+```java
+Decompiler decompiler = Decompiler.builder()
+    .inputs(new InMemoryContextSource("generated", classMap))
+    .output(mySaver)
+    .build();
+```
+
+You can mix `IContextSource` and `File` inputs in the same builder by calling `.inputs(...)` multiple times or combining overloads.
+
+## Filtering Which Classes Get Decompiled
+
+Three mechanisms let you restrict the decompilation scope.
+
+### `allowedPrefixes` on the builder
+
+Pass internal name prefixes (slash-separated) to the builder. Only classes whose names start with one of these prefixes will be decompiled:
+
+```java
+Decompiler decompiler = Decompiler.builder()
+    .inputs(new File("app.jar"))
+    .output(mySaver)
+    .allowedPrefixes("com/example/myapp/", "com/example/util/")
+    .build();
+```
+
+### `included-classes` / `excluded-classes` options
+
+Both options accept a regular expression matched against the fully qualified class name (dots as separators). They can be combined: Vineflower first applies `included-classes`, then removes anything matched by `excluded-classes`.
+
+```java
+Decompiler decompiler = Decompiler.builder()
+    .inputs(new File("app.jar"))
+    .output(mySaver)
+    .option(IFernflowerPreferences.INCLUDED_CLASSES, "^com\\.example\\..*")
+    .option(IFernflowerPreferences.EXCLUDED_CLASSES, ".*Test.*")
+    .build();
+```
+
+### `--only=` on the command line
+
+When running from the console, use `--only=com/example/Foo,com/example/Bar` to restrict decompilation to specific classes by name prefix.
+
+## Thread Management
+
+By default, Vineflower spawns one thread per available processor. Use the `thread-count` option to tune this for your environment:
+
+```java
+.option(IFernflowerPreferences.THREADS, "4")  // fixed thread count
+```
+
+Setting `thread-count` to `1` forces single-threaded operation, which is useful when you need deterministic output ordering or are embedding Vineflower inside a tool that already manages its own thread pool.
+
+## Error Handling with `IFernflowerLogger`
+
+`IFernflowerLogger` is an abstract class. Extend it, implement the two `writeMessage` overloads, and set a minimum severity level with `setSeverity`:
+
+```java AppLogger.java
+import org.jetbrains.java.decompiler.main.extern.IFernflowerLogger;
+
+public class AppLogger extends IFernflowerLogger {
+    @Override
+    public void writeMessage(String message, Severity severity) {
+        System.out.printf("[VF %s] %s%n", severity, message);
+    }
+
+    @Override
+    public void writeMessage(String message, Severity severity, Throwable t) {
+        System.err.printf("[VF %s] %s%n", severity, message);
+        t.printStackTrace(System.err);
+    }
+}
+```
+
+The severity ladder is `TRACE < INFO < WARN < ERROR`. To see all diagnostic output, call `logger.setSeverity(IFernflowerLogger.Severity.TRACE)` before passing it to the builder.
+
+### Capturing bytecode on failures
+
+Enable `dump-bytecode-on-error` so that when a method cannot be decompiled, its raw bytecode is embedded as a comment in the output rather than silently dropping the method body:
+
+```java
+.option(IFernflowerPreferences.DUMP_BYTECODE_ON_ERROR, "1")
+.option(IFernflowerPreferences.DUMP_EXCEPTION_ON_ERROR, "1")
+```
+
+<Note>
+**FabricMC compatibility:** If your project already depends on the FabricMC fork of Fernflower, you can replace it with Vineflower as a drop-in. Vineflower preserves the `org.jetbrains.java.decompiler` package structure and all public `IResultSaver`, `IFernflowerLogger`, and `IContextSource` interfaces, so existing implementations require no source changes. Only Vineflower-specific options and the new `Decompiler.builder()` API are additions.
+</Note>

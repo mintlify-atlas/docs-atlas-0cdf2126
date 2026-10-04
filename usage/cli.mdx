@@ -1,0 +1,178 @@
+---
+title: "Vineflower CLI: Commands, Flags, and Examples"
+sidebarTitle: "CLI"
+description: "Run Vineflower from the command line to decompile JARs, ZIPs, folders, and class files with fine-grained options, config files, and classpath libraries."
+---
+
+Vineflower ships as a self-contained executable JAR, so the only prerequisite is a Java 17 or later runtime on your `PATH`. Once downloaded, every feature of the decompiler is accessible through a single command, making it easy to integrate Vineflower into shell scripts, build pipelines, or just a quick one-off inspection of a compiled artifact.
+
+<Note>
+  Vineflower 1.11 and later requires **Java 17 or higher**. Vineflower 1.9–1.10 required Java 11. Running with an older JDK will produce an `UnsupportedClassVersionError` at startup.
+</Note>
+
+## Basic Syntax
+
+```text
+java -jar vineflower.jar [flags] [--option=value ...] <source>... <destination>
+```
+
+At least one `<source>` is required. The `<destination>` is optional — omit it to print decompiled source straight to the console.
+
+| Segment | Accepted values |
+|---|---|
+| `<source>` | `.jar`, `.zip`, directory, or individual `.class` file |
+| `<destination>` | directory, `.jar`, `.zip`, or omitted (console output) |
+
+When the destination name ends in `.jar` or `.zip`, Vineflower automatically writes a compressed archive. Any other name — or no name — is treated as a folder (which is created for you if it does not exist).
+
+---
+
+## Command-Line Flags
+
+These flags are positional and do not use the `--option=value` syntax.
+
+| Flag | Description |
+|---|---|
+| `-h`, `--help` | Print the full help screen and exit. |
+| `-s`, `--silent` | Suppress all output except errors (sets `log-level` to `error`). |
+| `--list-plugins` | Print information about all loaded plugins and exit. |
+| `-cfg <file>` or `-cfg=<file>` | Read additional arguments from a text file, one argument per line. |
+| `-e=<path>`, `--add-external=<path>` | Add a JAR or directory to the library classpath (for type resolution). Accepts comma-separated paths; may be specified multiple times. |
+| `-only=<pattern>`, `--only=<pattern>` | Restrict decompilation to classes whose fully qualified names *start with* the given string. Accepts comma-separated patterns; may be specified multiple times. |
+| `--file` | Force output to a single archive file. |
+| `--folder` | Force output to a directory tree. |
+| `--legacy-saving` | Use the legacy `ConsoleDecompiler`-style save path (mirrors the old Fernflower behaviour). |
+| `--method-to-decompile=<ref>` | Decompile a single method. Format: `owner.nameDescriptor` (e.g. `foo/Bar.baz()V`) or just `nameDescriptor` when decompiling a single class. |
+
+### Option Syntax
+
+All decompiler options (listed in the [Options reference](/usage/options)) can be passed in either **long form** or **short form**:
+
+```text
+# Long form (preferred)
+--decompile-generics=true
+--thread-count=4
+--log-level=warn
+
+# Boolean shorthand – no value means true
+--decompile-generics
+--no-remove-bridge          # prefix with no- to set false
+
+# Legacy short form (three-letter code)
+-dgs=1
+-thr=4
+```
+
+Values `true` / `false` are accepted in addition to `1` / `0` for boolean options.
+
+---
+
+## Examples
+
+<CodeGroup>
+
+```bash Decompile a JAR to a folder
+java -jar vineflower.jar MyApp.jar ./decompiled/
+```
+
+```bash Decompile a single .class file
+java -jar vineflower.jar com/example/Foo.class ./decompiled/
+```
+
+```bash Decompile to an output JAR (archive)
+java -jar vineflower.jar MyApp.jar decompiled-sources.jar
+```
+
+```bash Print a single class to the console
+java -jar vineflower.jar com/example/Foo.class
+```
+
+</CodeGroup>
+
+### Tuning Options on the Command Line
+
+```bash Multithreaded decompile with generics and comments disabled
+java -jar vineflower.jar \
+  --thread-count=8 \
+  --decompile-generics=false \
+  --decompiler-comments=false \
+  MyApp.jar \
+  ./decompiled/
+```
+
+```bash Decompile only classes in a specific package
+java -jar vineflower.jar \
+  --only=com/example/service/ \
+  MyApp.jar \
+  ./decompiled/
+```
+
+### Using a Config File
+
+Put one argument per line in a plain-text config file to avoid long command strings:
+
+```text vineflower.cfg
+--thread-count=4
+--decompile-generics=true
+--log-level=warn
+--decompiler-comments=false
+```
+
+Then pass it with `-cfg`:
+
+```bash
+java -jar vineflower.jar -cfg vineflower.cfg MyApp.jar ./decompiled/
+```
+
+Arguments in the config file are merged with any other arguments on the command line. The `-cfg` flag itself is expanded in-place, so you can mix it freely with other flags.
+
+### Adding External Classpath Libraries
+
+When the classes being decompiled reference types from libraries that are not bundled in the source JAR, Vineflower can resolve them if you provide the libraries explicitly:
+
+```bash
+java -jar vineflower.jar \
+  -e=libs/guava.jar \
+  -e=libs/log4j-api.jar \
+  MyApp.jar \
+  ./decompiled/
+```
+
+Multiple paths can also be supplied as a comma-separated list in a single `-e=` flag:
+
+```bash
+java -jar vineflower.jar \
+  -e=libs/guava.jar,libs/log4j-api.jar \
+  MyApp.jar \
+  ./decompiled/
+```
+
+### Decompile a Single Method
+
+```bash
+java -jar vineflower.jar \
+  --method-to-decompile=com/example/MyClass.process(Ljava/lang/String;)V \
+  MyApp.jar \
+  ./decompiled/
+```
+
+---
+
+## Commonly Used Options Quick-Reference
+
+The table below covers the options most frequently used at the command line. For the complete reference, see the [Options page](/usage/options).
+
+| Long name | Short | Type | Default | Description |
+|---|---|---|---|---|
+| `--thread-count` | `-thr` | INTEGER | all CPUs | Number of threads used during decompilation. |
+| `--log-level` | `-log` | STRING | `info` | Verbosity: `trace`, `info`, `warn`, or `error`. |
+| `--decompile-generics` | `-dgs` | BOOLEAN | `true` | Emit generic type parameters. |
+| `--decompile-inner` | `-din` | BOOLEAN | `true` | Include inner classes in output. |
+| `--decompile-enums` | `-den` | BOOLEAN | `true` | Decompile enum declarations. |
+| `--remove-bridge` | `-rbr` | BOOLEAN | `true` | Strip bridge methods from output. |
+| `--remove-synthetic` | `-rsy` | BOOLEAN | `true` | Strip synthetic methods and fields. |
+| `--rename-members` | `-ren` | BOOLEAN | `false` | Rename obfuscated identifiers with a numeric suffix. |
+| `--banner` | `-ban` | STRING | `""` | Text to prepend to every decompiled source file. |
+| `--indent-string` | `-ind` | STRING | 3 spaces | Characters used for each indentation level. |
+| `--skip-extra-files` | `-sef` | BOOLEAN | `false` | Do not copy non-class resources to the output. |
+| `--dump-bytecode-on-error` | `-dbe` | BOOLEAN | `true` | Embed raw bytecode in the output on decompilation failure. |

@@ -1,0 +1,318 @@
+---
+title: "Renaming Obfuscated Identifiers in Decompiled Code"
+sidebarTitle: "Identifier Renaming"
+description: "Use Vineflower's built-in renaming, the IIdentifierRenamer interface, or the variable-renaming plugin to restore readable names in obfuscated JARs."
+---
+
+When a JAR has been processed by a bytecode obfuscator, class names, field names, and method names are typically reduced to single letters or short numeric sequences like `a`, `b`, `c`, `a1`, `b2`. Vineflower cannot recover the original names by itself — those are gone — but it provides several complementary mechanisms to replace opaque identifiers with ones that are at least readable, and optionally to map them to known names from an external mapping file. This guide covers all three layers: the built-in automatic renamer, the `IIdentifierRenamer` interface for custom mapping logic, and the `variable-renaming` plugin for local variable names.
+
+## Why Renaming Matters
+
+Decompiling an obfuscated JAR without any renaming produces output where every class reference, field access, and local variable name is a short, context-free token. Navigation tools like "find usages" and "go to definition" still work, but reasoning about the code is nearly impossible at scale. Good renaming transforms `a.b(c, d)` into something like `gameState.update(player, delta)` — a qualitative difference in comprehensibility.
+
+## Built-in Automatic Renaming: `rename-members`
+
+The simplest renaming switch is `rename-members`. When enabled, Vineflower appends a numeric suffix to any class, field, or method name it judges to be too short or non-descriptive, ensuring uniqueness and making the output slightly more navigable without any external mapping data.
+
+```java
+Decompiler decompiler = Decompiler.builder()
+    .inputs(new File("obfuscated.jar"))
+    .output(mySaver)
+    .option(IFernflowerPreferences.RENAME_ENTITIES, "1")   // rename-members
+    .build();
+```
+
+From the command line:
+
+```bash
+java -jar vineflower.jar --rename-members=1 obfuscated.jar output/
+```
+
+This is a good first pass, but it only guarantees uniqueness; it does not produce meaningful names. For meaningful names you need either an `IIdentifierRenamer` or a mapping file.
+
+## The `IIdentifierRenamer` Interface
+
+`IIdentifierRenamer` lets you plug in arbitrary rename logic at the class, field, and method level. Vineflower calls your implementation before writing any identifier to the output, so every reference site is also updated.
+
+```java IIdentifierRenamer.java (source)
+public interface IIdentifierRenamer {
+
+  enum Type { ELEMENT_CLASS, ELEMENT_FIELD, ELEMENT_METHOD }
+
+  boolean toBeRenamed(Type elementType, String className, String element, String descriptor);
+
+  String getNextClassName(String fullName, String shortName);
+
+  String getNextFieldName(String className, String field, String descriptor);
+
+  String getNextMethodName(String className, String method, String descriptor);
+}
+```
+
+### Method reference
+
+<ParamField path="toBeRenamed(Type elementType, String className, String element, String descriptor)" type="boolean">
+Called for every class, field, and method. Return `true` if this identifier should be renamed. `elementType` tells you which kind of element it is (`ELEMENT_CLASS`, `ELEMENT_FIELD`, or `ELEMENT_METHOD`). For class entries, `className` is the fully qualified internal name and `element` is the short name. For fields and methods, `className` is the owner, `element` is the member name, and `descriptor` is the JVM descriptor (type or method signature).
+</ParamField>
+
+<ParamField path="getNextClassName(String fullName, String shortName)" type="String">
+Return the replacement class name. `fullName` is the slash-separated internal name (e.g., `com/example/a`); `shortName` is just the simple name portion (`a`). Return a valid Java identifier.
+</ParamField>
+
+<ParamField path="getNextFieldName(String className, String field, String descriptor)" type="String">
+Return the replacement field name. `className` is the internal owner name, `field` is the current field name, `descriptor` is the field type descriptor (e.g., `I` for int, `Ljava/lang/String;` for String).
+</ParamField>
+
+<ParamField path="getNextMethodName(String className, String method, String descriptor)" type="String">
+Return the replacement method name. `descriptor` is the full JVM method descriptor including parameter types and return type.
+</ParamField>
+
+### Registering your implementation
+
+Set the `user-renamer-class` option to the fully-qualified name of your `IIdentifierRenamer` implementation. Vineflower will instantiate it reflectively (no-arg constructor required):
+
+```java
+Decompiler decompiler = Decompiler.builder()
+    .inputs(new File("obfuscated.jar"))
+    .output(mySaver)
+    .option(IFernflowerPreferences.RENAME_ENTITIES,    "1")
+    .option(IFernflowerPreferences.USER_RENAMER_CLASS, "com.example.MyProguardRenamer")
+    .build();
+```
+
+## Complete Example: ProGuard Mapping Renamer
+
+<Steps>
+
+### Parse the ProGuard mapping file
+
+A ProGuard mapping file has the format:
+```
+original.ClassName -> obfuscated.Name:
+    originalField -> a
+    returnType originalMethod(args) -> b
+```
+
+```java ProguardMappingParser.java
+import java.io.*;
+import java.util.*;
+
+public class ProguardMappingParser {
+    // Maps obfuscated internal name -> original simple name
+    public final Map<String, String> classNames  = new HashMap<>();
+    // Maps "obfClassName.obfFieldName" -> originalName
+    public final Map<String, String> fieldNames  = new HashMap<>();
+    // Maps "obfClassName.obfMethodName+descriptor" -> originalName
+    public final Map<String, String> methodNames = new HashMap<>();
+
+    public static ProguardMappingParser parse(File mappingFile) throws IOException {
+        ProguardMappingParser p = new ProguardMappingParser();
+        String currentObfClass = null;
+
+        try (BufferedReader br = new BufferedReader(new FileReader(mappingFile))) {
+            String line;
+            while ((line = br.readLine()) != null) {
+                line = line.trim();
+                if (line.isEmpty() || line.startsWith("#")) continue;
+
+                if (line.endsWith(":")) {
+                    // Class mapping: "original.Name -> obf.Name:"
+                    String[] parts = line.split(" -> ");
+                    String original = parts[0].trim();
+                    currentObfClass = parts[1].replace(":", "").trim()
+                        .replace('.', '/');
+                    String originalInternal = original.replace('.', '/');
+                    p.classNames.put(currentObfClass, originalInternal
+                        .substring(originalInternal.lastIndexOf('/') + 1));
+                } else if (currentObfClass != null && line.contains("->")) {
+                    String[] parts = line.split(" -> ");
+                    String obfName = parts[1].trim();
+                    String decl    = parts[0].trim();
+                    if (decl.contains("(")) {
+                        // method: strip line ranges prefix if present
+                        int colon = decl.lastIndexOf(':');
+                        if (colon >= 0) decl = decl.substring(colon + 1);
+                        String originalMethod = decl.substring(
+                            decl.lastIndexOf(' ') + 1,
+                            decl.indexOf('('));
+                        p.methodNames.put(currentObfClass + "." + obfName,
+                            originalMethod);
+                    } else {
+                        // field
+                        String originalField = decl.substring(
+                            decl.lastIndexOf(' ') + 1);
+                        p.fieldNames.put(currentObfClass + "." + obfName,
+                            originalField);
+                    }
+                }
+            }
+        }
+        return p;
+    }
+}
+```
+
+### Implement `IIdentifierRenamer`
+
+```java ProguardRenamer.java
+import org.jetbrains.java.decompiler.main.extern.IIdentifierRenamer;
+
+public class ProguardRenamer implements IIdentifierRenamer {
+    private final ProguardMappingParser mapping;
+
+    public ProguardRenamer(File mappingFile) throws Exception {
+        this.mapping = ProguardMappingParser.parse(mappingFile);
+    }
+
+    @Override
+    public boolean toBeRenamed(Type elementType, String className,
+                                String element, String descriptor) {
+        return switch (elementType) {
+            case ELEMENT_CLASS  -> mapping.classNames.containsKey(className);
+            case ELEMENT_FIELD  -> mapping.fieldNames.containsKey(className + "." + element);
+            case ELEMENT_METHOD -> mapping.methodNames.containsKey(className + "." + element);
+        };
+    }
+
+    @Override
+    public String getNextClassName(String fullName, String shortName) {
+        return mapping.classNames.getOrDefault(fullName, shortName);
+    }
+
+    @Override
+    public String getNextFieldName(String className, String field, String descriptor) {
+        return mapping.fieldNames.getOrDefault(className + "." + field, field);
+    }
+
+    @Override
+    public String getNextMethodName(String className, String method, String descriptor) {
+        return mapping.methodNames.getOrDefault(className + "." + method, method);
+    }
+}
+```
+
+### Wire it into the decompiler
+
+Because `user-renamer-class` requires a no-arg constructor when loaded reflectively, expose your file path via a system property or configuration resource, or register the instance via the builder option directly:
+
+```java
+// Make the mapping file path available to the renamer constructor through
+// a system property (one approach; adapt as needed)
+System.setProperty("proguard.mapping", "mapping.txt");
+
+Decompiler decompiler = Decompiler.builder()
+    .inputs(new File("obfuscated.jar"))
+    .output(mySaver)
+    .option(IFernflowerPreferences.RENAME_ENTITIES,    "1")
+    .option(IFernflowerPreferences.USER_RENAMER_CLASS,
+            "com.example.ProguardRenamer")
+    .build();
+
+decompiler.decompile();
+```
+
+</Steps>
+
+## Local Variable Renaming with the `variable-renaming` Plugin
+
+Class, field, and method names are stored in the constant pool and can be recovered from mapping files. Local variable names, however, are only sometimes available via the LVT (Local Variable Table) debug attribute. The `variable-renaming` plugin provides two built-in strategies for generating readable local variable names when debug info is absent.
+
+### Enabling the plugin
+
+The plugin is bundled inside `vineflower.jar` under `META-INF/plugins/` and is loaded automatically. Activate a naming strategy with the `variable-renaming` option:
+
+```bash
+java -jar vineflower.jar --variable-renaming=jad obfuscated.jar output/
+```
+
+Or programmatically:
+
+```java
+import org.vineflower.variablerenaming.VariableRenamingOptions;
+
+Decompiler decompiler = Decompiler.builder()
+    .inputs(new File("obfuscated.jar"))
+    .output(mySaver)
+    .option(VariableRenamingOptions.VARIABLE_RENAMER, "jad")
+    .build();
+```
+
+### Available naming strategies
+
+| Strategy | `variable-renaming` value | Description |
+|---|---|---|
+| **JAD-style** | `jad` | Names variables after their type: `int i, j, k`, `String s`, `boolean flag`, `List list`. Mirrors the historic JAD decompiler output familiar to many Java developers. |
+| **Tiny** | `tiny` | Names variables using lowercase type names with numeric suffixes for disambiguation: `int i`, `String string`, `Object object2`. |
+
+Both strategies also rename method parameters when `rename-parameters=1` is set:
+
+```bash
+java -jar vineflower.jar --variable-renaming=jad --rename-parameters=1 obfuscated.jar output/
+```
+
+### Tiny mapping file support
+
+The `tiny` strategy can additionally consume a [Tiny v2 mapping file](https://wiki.fabricmc.net/documentation:tiny2) to apply known variable and parameter names rather than generating synthetic ones. Supply the mapping file via the plugin option:
+
+```bash
+java -jar vineflower.jar --variable-renaming=tiny --tiny-file=mappings.tiny obfuscated.jar output/
+```
+
+## LVT and MethodParameters Attribute Names
+
+Before reaching for a custom renamer, check whether the classes being decompiled already contain debug metadata. Two options control this:
+
+| Option | CLI flag | Default | Effect |
+|---|---|---|---|
+| `USE_DEBUG_VAR_NAMES` | `--use-lvt-names` | `1` (enabled) | Use names from the LocalVariableTable attribute when present. |
+| `USE_METHOD_PARAMETERS` | `--use-method-parameters` | `1` (enabled) | Use names from the MethodParameters attribute (compiled with `-parameters`) when present. |
+
+Both are on by default. If you are seeing generated names like `var1_1` even though you compiled with debug info (`-g`), verify that the class files actually contain LVT data:
+
+```bash
+javap -verbose MyClass.class | grep LocalVariableTable
+```
+
+## Implementing `IVariableNamingFactory` and `IVariableNameProvider`
+
+For advanced cases where neither JAD-style nor Tiny naming is suitable, implement your own variable naming factory. `IVariableNamingFactory` is the entry point; `IVariableNameProvider` carries out the per-method renaming logic.
+
+```java
+public interface IVariableNamingFactory {
+    IVariableNameProvider createFactory(StructMethod structMethod);
+}
+```
+
+```java
+public interface IVariableNameProvider {
+    // Rename local variables; return a map from VarVersionPair to new name
+    Map<VarVersionPair, String> rename(
+        Map<VarVersionPair, Pair<VarType, String>> variables);
+
+    // Optionally rename parameters
+    default String renameParameter(int flags, VarType type, String name, int index) { ... }
+
+    void addParentContext(IVariableNameProvider renamer);
+}
+```
+
+Register your factory by implementing the `getRenamingFactory()` method on your `Plugin` class:
+
+```java MyRenamingPlugin.java
+import org.jetbrains.java.decompiler.api.plugin.Plugin;
+import org.jetbrains.java.decompiler.main.extern.IVariableNamingFactory;
+
+public class MyRenamingPlugin implements Plugin {
+    @Override public String id()          { return "MyRenaming"; }
+    @Override public String description() { return "Custom variable naming."; }
+
+    @Override
+    public IVariableNamingFactory getRenamingFactory() {
+        return method -> new MyVariableNameProvider(method);
+    }
+}
+```
+
+<Tip>
+Combining `rename-members=1` with a custom `IIdentifierRenamer` gives you the best of both worlds: Vineflower's built-in pass handles short, clearly-obfuscated names automatically, while your renamer overlays precise names from a mapping file for anything it recognises. Set `toBeRenamed` to return `true` only for entries your mapping covers, and let the built-in pass handle the rest.
+</Tip>

@@ -1,0 +1,129 @@
+---
+title: "Vineflower Version History and Changelog"
+sidebarTitle: "Changelog"
+description: "Version history, Java compatibility requirements, project heritage, and major milestones for the Vineflower decompiler from its Fernflower roots to today."
+---
+
+Vineflower's version history reflects both its heritage as a fork and its ongoing evolution as an independent, community-driven decompiler. This page summarises major milestones, Java runtime requirements, and the project's lineage. For the complete, commit-level release notes of every version, see the GitHub Releases page.
+
+<Note>
+Full release notes for every version — including bug fixes, new options, and test coverage changes — are published on the [GitHub Releases page](https://github.com/Vineflower/vineflower/releases).
+</Note>
+
+---
+
+## Current release
+
+| Property | Value |
+|---|---|
+| **Latest version** | `1.12.0` |
+| **Minimum Java runtime** | Java 17 |
+| **Build toolchain** | Java 17 (`sourceCompatibility = '17'`, `targetCompatibility = '17'`) |
+| **Group ID** | `org.vineflower` |
+| **Artifact ID** | `vineflower` |
+| **License** | Apache 2.0 |
+
+### Gradle dependency
+
+```groovy build.gradle (Groovy DSL)
+dependencies {
+    implementation 'org.vineflower:vineflower:1.12.0'
+}
+```
+
+```kotlin build.gradle.kts (Kotlin DSL)
+dependencies {
+    implementation("org.vineflower:vineflower:1.12.0")
+}
+```
+
+---
+
+## Java runtime compatibility by version
+
+Vineflower's minimum Java runtime requirement has increased over time to allow the use of modern language features in the decompiler itself:
+
+| Vineflower version range | Minimum Java runtime |
+|---|---|
+| 1.0 – 1.8.x | Java 8 |
+| 1.9 – 1.10.x | Java 11 |
+| 1.11+ | Java 17 |
+
+<Warning>
+Attempting to run Vineflower 1.11+ on Java 11 or 1.9+ on Java 8 will result in an `UnsupportedClassVersionError` at startup. Always check the compatibility table before upgrading.
+</Warning>
+
+The decompiler itself is able to **analyse** bytecode targeting Java versions up to Java 25 (as reflected by the test matrix in `build.gradle`: 8, 9, 11, 16, 17, 21, 25). The runtime requirement refers only to the JVM used to **run** Vineflower.
+
+---
+
+## Project heritage and lineage
+
+Vineflower did not start from scratch. Its codebase descends through a chain of forks, each adding improvements:
+
+<Steps>
+  <Step title="Fernflower (JetBrains)">
+    The original Java decompiler created by **Stiver** and maintained by **JetBrains** as part of IntelliJ IDEA. Fernflower established the core pipeline — CFG construction, statement structuring, and the exprent model — that Vineflower still uses today. Licensed under Apache 2.0.
+  </Step>
+
+  <Step title="ForgeFlower (MinecraftForge Team)">
+    A fork maintained by the MinecraftForge team that added fixes and improvements oriented toward Minecraft modding toolchains, including better handling of obfuscated names and additional output quality work.
+  </Step>
+
+  <Step title="FabricMC fork">
+    FabricMC maintained their own fork of Fernflower with a focus on correctness and integration into the Fabric toolchain.
+  </Step>
+
+  <Step title="Quiltflower">
+    A direct predecessor to Vineflower, Quiltflower introduced significant new capabilities — including early work on the plugin API, multi-threaded decompilation, and improved output quality for modern Java features.
+  </Step>
+
+  <Step title="Vineflower (current)">
+    Vineflower is a direct continuation of Quiltflower, developed under the Vineflower organisation. It consolidates and extends all prior work with a focus on output quality, speed, and an extensible plugin architecture.
+  </Step>
+</Steps>
+
+---
+
+## Major milestone features
+
+The following table summarises the categories of significant capabilities introduced across Vineflower's development. Exact version numbers for each feature are listed in the [GitHub Release notes](https://github.com/Vineflower/vineflower/releases).
+
+<CardGroup cols={2}>
+  <Card title="Modern Java language support" icon="java">
+    Records, sealed classes, switch expressions and statements, pattern matching, text blocks, enhanced `instanceof`, and features targeting Java 21+.
+  </Card>
+  <Card title="Multithreaded decompilation" icon="bolt">
+    Parallel per-class decompilation reduces wall-clock time significantly on multi-core hardware, controlled via the `threads` option.
+  </Card>
+  <Card title="Plugin API" icon="plug">
+    The `org.jetbrains.java.decompiler.api.plugin` package lets external JARs register decompilation passes at well-defined `JavaPassLocation` and `ClassPassLocation` hook points, and supply custom `LanguageSpec` implementations for non-Java JVM languages.
+  </Card>
+  <Card title="JVM language plugins" icon="code">
+    Kotlin and Scala decompilation plugins (under `plugins/`) are bundled into the all-in-one JAR, demonstrating the `LanguageSpec` and `LanguageChooser` APIs for language-specific output.
+  </Card>
+  <Card title="IContextSource API" icon="database">
+    Replaced the deprecated `IBytecodeProvider` with a richer context model supporting multi-release JARs, lazy library loading, custom output sinks, and child-context discovery.
+  </Card>
+  <Card title="Improved output quality" icon="sparkles">
+    Ongoing improvements to the SSA/SSAU simplification passes, loop restructuring (`MergeHelper`), try-with-resources detection, and variable-definition placement, resulting in cleaner and more idiomatic decompiled output.
+  </Card>
+</CardGroup>
+
+---
+
+## Contributing
+
+Vineflower welcomes contributions from the community. Before opening a pull request, please read the [CONTRIBUTING guide](https://github.com/Vineflower/vineflower/blob/main/CONTRIBUTING.md) for full details on the development workflow, test expectations, and coding standards.
+
+Key points:
+
+- Target the latest `develop/1.xx.y` branch when submitting pull requests.
+- Every change that affects decompiler output should include or update fixture tests.
+- The project's website has detailed [development setup instructions](https://vineflower.org/development/) and debugging guidance.
+
+<Warning>
+**AI policy:** Vineflower does not accept contributions that are generated by AI or large language models. All submitted code, documentation, and tests must be authored by a human contributor.
+</Warning>
+
+For questions and support, visit the [community platforms listed on the Vineflower website](https://vineflower.org/socials/).

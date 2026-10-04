@@ -1,0 +1,401 @@
+---
+title: "Embedding Vineflower as a Java Library"
+sidebarTitle: "Library API"
+description: "Add Vineflower as a Gradle or Maven dependency and drive decompilation programmatically via the fluent Decompiler.builder() API or the lower-level Fernflower engine."
+---
+
+Vineflower is published to Maven Central as `org.vineflower:vineflower` and can be embedded directly into any JVM application. The library exposes two API layers: a modern fluent builder (`Decompiler.builder()`) introduced to simplify common use-cases, and the lower-level `Fernflower` / `BaseDecompiler` classes that have been present since the original Fernflower codebase. Both layers accept the same option keys, classpath inputs, and output sink interfaces, so you can start with the builder and drop down to the engine if you need finer control.
+
+<Note>
+  Vineflower 1.11+ requires **Java 17 or higher**. Make sure your project's toolchain matches.
+</Note>
+
+## Adding the Dependency
+
+<CodeGroup>
+
+```groovy build.gradle (Groovy DSL)
+dependencies {
+    implementation 'org.vineflower:vineflower:1.12.0'
+}
+```
+
+```kotlin build.gradle.kts (Kotlin DSL)
+dependencies {
+    implementation("org.vineflower:vineflower:1.12.0")
+}
+```
+
+```xml pom.xml (Maven)
+<dependency>
+    <groupId>org.vineflower</groupId>
+    <artifactId>vineflower</artifactId>
+    <version>1.12.0</version>
+</dependency>
+```
+
+</CodeGroup>
+
+<Tip>
+  Check [Maven Central](https://central.sonatype.com/artifact/org.vineflower/vineflower) for the latest release version.
+</Tip>
+
+---
+
+## The Modern API: `Decompiler.builder()`
+
+The `Decompiler` class (in `org.jetbrains.java.decompiler.api`) provides a fluent builder that validates its inputs before constructing the internal engine. This is the recommended entry point for new integrations.
+
+<Steps>
+
+### Add inputs
+
+Pass one or more source files (JAR, ZIP, directory, or `.class` file). Each file is registered as a decompilation source.
+
+```java
+Decompiler.Builder builder = Decompiler.builder()
+    .inputs(new File("MyApp.jar"));
+```
+
+You can supply multiple files, or an `IContextSource` implementation for custom sources:
+
+```java
+builder.inputs(new File("module-a.jar"), new File("module-b.jar"));
+```
+
+### Add library classpath (optional)
+
+Library files are used for type resolution only — their classes are not written to the output. This improves the accuracy of decompiled generic types and method signatures.
+
+```java
+builder.libraries(new File("libs/guava.jar"), new File("libs/log4j-api.jar"));
+```
+
+### Set the output sink
+
+Implement `IResultSaver` to decide where decompiled source goes. See the [Implementing IResultSaver](#implementing-iresultsaver) section below for a minimal example.
+
+```java
+builder.output(myResultSaver);
+```
+
+### Configure options (optional)
+
+Pass any option from `IFernflowerPreferences` by its long name:
+
+```java
+builder
+    .option(IFernflowerPreferences.DECOMPILE_GENERIC_SIGNATURES, true)
+    .option(IFernflowerPreferences.THREADS, 4)
+    .option(IFernflowerPreferences.LOG_LEVEL, "warn");
+```
+
+Or use the variadic form to set several options at once:
+
+```java
+builder.options(
+    IFernflowerPreferences.REMOVE_BRIDGE, true,
+    IFernflowerPreferences.REMOVE_SYNTHETIC, true
+);
+```
+
+`Boolean` values are automatically normalised to `"1"` / `"0"` internally, so you can pass `true` / `false` directly.
+
+### Attach a logger (optional)
+
+Provide a custom `IFernflowerLogger` to route log output into your own logging framework. See [Implementing IFernflowerLogger](#implementing-ifernflowerlogger).
+
+```java
+builder.logger(myLogger);
+```
+
+If no logger is supplied, the default `IFernflowerLogger.NO_OP` silences all output.
+
+### Filter classes (optional)
+
+Use `allowedPrefixes` to restrict decompilation to classes whose fully qualified names begin with the given strings — the programmatic equivalent of `--only=` on the CLI.
+
+```java
+builder.allowedPrefixes("com/example/service/", "com/example/model/");
+```
+
+### Build and decompile
+
+```java
+builder.build().decompile();
+```
+
+`build()` validates that at least one input and one output have been set, then constructs the `Fernflower` engine. `decompile()` runs decompilation and clears the internal context when finished.
+
+</Steps>
+
+### Complete Example
+
+```java CompleteExample.java
+import org.jetbrains.java.decompiler.api.Decompiler;
+import org.jetbrains.java.decompiler.main.extern.IFernflowerLogger;
+import org.jetbrains.java.decompiler.main.extern.IFernflowerPreferences;
+import org.jetbrains.java.decompiler.main.extern.IResultSaver;
+
+import java.io.File;
+import java.io.IOException;
+import java.io.PrintStream;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.util.jar.Manifest;
+
+public class CompleteExample {
+    public static void main(String[] args) throws Exception {
+        File sourceJar = new File("MyApp.jar");
+        File outputDir = new File("decompiled");
+        outputDir.mkdirs();
+
+        Decompiler.builder()
+            .inputs(sourceJar)
+            .libraries(new File("libs/guava.jar"))
+            .output(new DirectorySaver(outputDir))
+            .logger(new PrintStreamLogger(System.out))
+            .option(IFernflowerPreferences.DECOMPILE_GENERIC_SIGNATURES, true)
+            .option(IFernflowerPreferences.THREADS, 4)
+            .build()
+            .decompile();
+    }
+
+    // Minimal IResultSaver that writes .java files to a directory
+    static class DirectorySaver implements IResultSaver {
+        private final File root;
+        DirectorySaver(File root) { this.root = root; }
+
+        @Override
+        public void saveFolder(String path) {
+            new File(root, path).mkdirs();
+        }
+
+        @Override
+        public void saveClassFile(String path, String qualifiedName,
+                                  String entryName, String content, int[] mapping) {
+            File target = new File(new File(root, path), entryName);
+            target.getParentFile().mkdirs();
+            if (content != null) {
+                try {
+                    Files.writeString(target.toPath(), content, StandardCharsets.UTF_8);
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
+            }
+        }
+
+        @Override public void copyFile(String source, String path, String entryName) {}
+        @Override public void createArchive(String path, String archiveName, Manifest manifest) {}
+        @Override public void saveDirEntry(String path, String archiveName, String entryName) {}
+        @Override public void copyEntry(String source, String path, String archiveName, String entry) {}
+        @Override public void saveClassEntry(String path, String archiveName,
+                                             String qualifiedName, String entryName, String content) {}
+        @Override public void closeArchive(String path, String archiveName) {}
+    }
+
+    // Minimal IFernflowerLogger that forwards to a PrintStream
+    static class PrintStreamLogger extends IFernflowerLogger {
+        private final PrintStream out;
+        PrintStreamLogger(PrintStream out) { this.out = out; }
+
+        @Override
+        public void writeMessage(String message, Severity severity) {
+            if (accepts(severity)) out.println(severity.prefix + message);
+        }
+
+        @Override
+        public void writeMessage(String message, Severity severity, Throwable t) {
+            if (accepts(severity)) { writeMessage(message, severity); t.printStackTrace(out); }
+        }
+    }
+}
+```
+
+---
+
+## Implementing `IResultSaver`
+
+`IResultSaver` (`org.jetbrains.java.decompiler.main.extern`) is the output contract between the decompiler engine and your code. Every method maps to one kind of output event.
+
+<Accordion title="IResultSaver method reference">
+
+| Method | When called | Notes |
+|---|---|---|
+| `saveFolder(path)` | A new output directory should be created. | `path` is relative to the output root. |
+| `copyFile(source, path, entryName)` | A non-class resource should be copied as-is. | `source` is the absolute path of the original file. |
+| `saveClassFile(path, qualifiedName, entryName, content, mapping)` | A decompiled `.java` file is ready to write. | `content` is the full source text; `mapping` is a bytecode-to-line array (may be `null`). |
+| `createArchive(path, archiveName, manifest)` | An output archive should be opened. | `manifest` is `null` for plain ZIPs. |
+| `saveDirEntry(path, archiveName, entryName)` | A directory entry should be added to an open archive. | |
+| `copyEntry(source, path, archiveName, entryName)` | A raw entry should be copied from an input archive into an output archive. | |
+| `saveClassEntry(path, archiveName, qualifiedName, entryName, content)` | A decompiled class entry should be written into an open archive. | Overload with `int[] mapping` also available. |
+| `closeArchive(path, archiveName)` | An output archive should be flushed and closed. | |
+
+</Accordion>
+
+The interface also extends `AutoCloseable` with a default no-op `close()`, which you can override to release any resources held by your saver.
+
+<CodeGroup>
+
+```java Directory-based saver (folder output)
+public class DirectorySaver implements IResultSaver {
+    private final File root;
+
+    public DirectorySaver(File root) {
+        this.root = root;
+    }
+
+    @Override
+    public void saveFolder(String path) {
+        new File(root, path).mkdirs();
+    }
+
+    @Override
+    public void saveClassFile(String path, String qualifiedName,
+                              String entryName, String content, int[] mapping) {
+        File out = new File(new File(root, path), entryName);
+        out.getParentFile().mkdirs();
+        if (content != null) {
+            try {
+                Files.writeString(out.toPath(), content, StandardCharsets.UTF_8);
+            } catch (IOException e) {
+                throw new UncheckedIOException(e);
+            }
+        }
+    }
+
+    // Archive methods are no-ops for directory output
+    @Override public void copyFile(String source, String path, String entryName) {}
+    @Override public void createArchive(String path, String archiveName, Manifest manifest) {}
+    @Override public void saveDirEntry(String path, String archiveName, String entryName) {}
+    @Override public void copyEntry(String source, String path, String archiveName, String entry) {}
+    @Override public void saveClassEntry(String path, String archiveName,
+                                         String qualifiedName, String entryName, String content) {}
+    @Override public void closeArchive(String path, String archiveName) {}
+}
+```
+
+```java In-memory saver (collect results as strings)
+public class InMemorySaver implements IResultSaver {
+    private final Map<String, String> results = new LinkedHashMap<>();
+
+    /** Returns a map from qualified class name to decompiled source. */
+    public Map<String, String> getResults() {
+        return Collections.unmodifiableMap(results);
+    }
+
+    @Override
+    public void saveClassFile(String path, String qualifiedName,
+                              String entryName, String content, int[] mapping) {
+        if (content != null) results.put(qualifiedName, content);
+    }
+
+    @Override public void saveFolder(String path) {}
+    @Override public void copyFile(String source, String path, String entryName) {}
+    @Override public void createArchive(String path, String archiveName, Manifest manifest) {}
+    @Override public void saveDirEntry(String path, String archiveName, String entryName) {}
+    @Override public void copyEntry(String s, String p, String a, String e) {}
+    @Override public void saveClassEntry(String path, String archiveName,
+                                          String qualifiedName, String entryName, String content) {
+        if (content != null) results.put(qualifiedName, content);
+    }
+    @Override public void closeArchive(String path, String archiveName) {}
+}
+```
+
+</CodeGroup>
+
+---
+
+## Implementing `IFernflowerLogger`
+
+`IFernflowerLogger` is an abstract class. Subclass it and implement the two required `writeMessage` overloads. The base class tracks the minimum `Severity` level and provides the `accepts(Severity)` guard.
+
+```java SLF4JLogger.java
+import org.jetbrains.java.decompiler.main.extern.IFernflowerLogger;
+import org.slf4j.Logger;
+
+public class SLF4JLogger extends IFernflowerLogger {
+    private final Logger log;
+
+    public SLF4JLogger(Logger log) {
+        this.log = log;
+    }
+
+    @Override
+    public void writeMessage(String message, Severity severity) {
+        if (!accepts(severity)) return;
+        switch (severity) {
+            case TRACE -> log.trace(message);
+            case INFO  -> log.info(message);
+            case WARN  -> log.warn(message);
+            case ERROR -> log.error(message);
+        }
+    }
+
+    @Override
+    public void writeMessage(String message, Severity severity, Throwable t) {
+        if (!accepts(severity)) return;
+        switch (severity) {
+            case TRACE -> log.trace(message, t);
+            case INFO  -> log.info(message, t);
+            case WARN  -> log.warn(message, t);
+            case ERROR -> log.error(message, t);
+        }
+    }
+}
+```
+
+<Tip>
+  `IFernflowerLogger.NO_OP` is a pre-built no-op instance. Pass it to `Decompiler.builder().logger(IFernflowerLogger.NO_OP)` if you want silent decompilation without writing a subclass.
+</Tip>
+
+The logger also exposes optional lifecycle hooks you can override to track progress:
+
+```java Progress tracking hooks
+@Override public void startReadingClass(String className)  { /* class about to be decompiled */ }
+@Override public void endReadingClass()                    { /* class decompilation finished  */ }
+@Override public void startMethod(String methodName)       { /* method about to be processed */ }
+@Override public void endMethod()                          { /* method processing finished   */ }
+```
+
+---
+
+## Legacy API: `BaseDecompiler` and `Fernflower`
+
+The `BaseDecompiler` class (in `org.jetbrains.java.decompiler.main.decompiler`) wraps `Fernflower` with a slightly simpler interface and has been available since early Fernflower. Use it if you need compatibility with code written against the original API.
+
+```java BaseDecompiler usage
+import org.jetbrains.java.decompiler.main.decompiler.BaseDecompiler;
+import org.jetbrains.java.decompiler.main.extern.IFernflowerPreferences;
+
+import java.io.File;
+import java.util.HashMap;
+import java.util.Map;
+
+Map<String, Object> options = new HashMap<>();
+options.put(IFernflowerPreferences.DECOMPILE_GENERIC_SIGNATURES, "1");
+options.put(IFernflowerPreferences.LOG_LEVEL, "warn");
+
+BaseDecompiler decompiler = new BaseDecompiler(mySaver, options, myLogger);
+decompiler.addSource(new File("MyApp.jar"));
+decompiler.addLibrary(new File("libs/guava.jar"));
+decompiler.decompileContext(); // also calls clearContext() internally
+```
+
+<Warning>
+  `BaseDecompiler` and the four-argument `Fernflower` constructor that accepts `IBytecodeProvider` are both deprecated. Prefer `Decompiler.builder()` for new code — it validates inputs at build time and handles context cleanup automatically.
+</Warning>
+
+### Option format with `BaseDecompiler`
+
+The `BaseDecompiler` / `Fernflower` constructors accept options as `Map<String, Object>`. All values are stored as strings internally:
+- Boolean options: pass `"1"` (true) or `"0"` (false), **not** Java `boolean` primitives.
+- Three-letter short names (e.g. `"dgs"`) are automatically mapped to their long-form equivalents by the engine.
+
+```java
+options.put("dgs", "1");                     // short name, auto-expanded
+options.put("decompile-generics", "1");      // long name, preferred
+```
+
+The `Decompiler.builder()` API automatically converts Java `Boolean` / `true` / `false` to `"1"` / `"0"`, so you do not need to think about this when using the builder.

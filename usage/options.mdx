@@ -1,0 +1,209 @@
+---
+title: "Vineflower Decompiler Options Reference"
+sidebarTitle: "Options"
+description: "Complete reference for every Vineflower decompiler option: long names, short names, types, defaults, and descriptions, grouped by category."
+---
+
+Vineflower's behaviour is controlled by a flat set of named options defined as string constants in `IFernflowerPreferences`. Each option has a **long name** (e.g. `decompile-generics`), an optional **short name** (e.g. `dgs`), a **type** (`BOOLEAN`, `STRING`, or `INTEGER`), and a compiled-in default. Short names exist for backwards compatibility with older tooling; new integrations should always prefer long names.
+
+## How to Pass Options
+
+<Tabs>
+  <Tab title="CLI (long form)">
+    ```bash
+    # Explicit value
+    java -jar vineflower.jar --decompile-generics=true --thread-count=4 input.jar out/
+
+    # Boolean shorthand – bare flag = true
+    java -jar vineflower.jar --decompile-generics input.jar out/
+
+    # Boolean negation with no- prefix
+    java -jar vineflower.jar --no-remove-bridge input.jar out/
+    ```
+  </Tab>
+  <Tab title="CLI (short form)">
+    ```bash
+    # Legacy three-letter short name
+    java -jar vineflower.jar -dgs=1 -thr=4 input.jar out/
+    ```
+  </Tab>
+  <Tab title="Java API (builder)">
+    ```java
+    Decompiler.builder()
+        .option(IFernflowerPreferences.DECOMPILE_GENERIC_SIGNATURES, true)
+        .option(IFernflowerPreferences.THREADS, 4)
+        .option(IFernflowerPreferences.LOG_LEVEL, "warn")
+        // ...
+        .build().decompile();
+    ```
+  </Tab>
+  <Tab title="Java API (map)">
+    ```java
+    Map<String, Object> options = new HashMap<>();
+    options.put(IFernflowerPreferences.DECOMPILE_GENERIC_SIGNATURES, "1");
+    options.put(IFernflowerPreferences.THREADS, "4");
+    options.put(IFernflowerPreferences.LOG_LEVEL, "warn");
+
+    new BaseDecompiler(saver, options, logger);
+    ```
+  </Tab>
+  <Tab title="Config file">
+    ```text vineflower.cfg
+    --decompile-generics=true
+    --thread-count=4
+    --log-level=warn
+    ```
+    ```bash
+    java -jar vineflower.jar -cfg vineflower.cfg input.jar out/
+    ```
+  </Tab>
+</Tabs>
+
+<Note>
+  Boolean options accept `true`/`false` and `1`/`0` interchangeably. The `Decompiler.builder()` API also accepts Java `boolean` primitives and normalises them automatically.
+</Note>
+
+---
+
+## 1. Code Recovery
+
+Options that control how Vineflower reconstructs high-level Java constructs from bytecode.
+
+| Long name | Short | Type | Default | Description |
+|---|---|---|---|---|
+| `decompile-generics` | `dgs` | BOOLEAN | `true` | Decompile generic type parameters in classes, methods, fields, and local variables. |
+| `decompile-inner` | `din` | BOOLEAN | `true` | Process inner classes and include them in the decompiled output. |
+| `decompile-enums` | `den` | BOOLEAN | `true` | Decompile enum declarations rather than leaving raw synthetic code. |
+| `decompile-assert` | `das` | BOOLEAN | `true` | Decompile assert statements. |
+| `decompile-java4` | `dc4` | BOOLEAN | `true` | Resugar the Java 1–4 class-reference pattern (e.g. `Foo.class`) instead of leaving the synthetic helper code. |
+| `decompile-preview` | `dpr` | BOOLEAN | `true` | Decompile features marked as preview or incubating in recent Java versions. |
+| `decompile-finally` | `fdi` | BOOLEAN | `true` | Decompile finally blocks by collapsing the duplicated code the compiler generates. |
+| `lambda-to-anonymous-class` | `lac` | BOOLEAN | `false` | Emit lambda expressions as anonymous class instances instead of lambda syntax. |
+| `pattern-matching` | `pam` | BOOLEAN | `true` | Use if- and switch-pattern-matching syntax where applicable. |
+| `decompile-switch-expressions` | `swe` | BOOLEAN | `true` | Decompile switch expressions present in modern Java class files. |
+| `ternary-in-if` | `tco` | BOOLEAN | `true` | *(Experimental)* Collapse if statements that contain a ternary expression in their condition. |
+| `ternary-constant-simplification` | `tcs` | BOOLEAN | `false` | Fold branches of ternary expressions that have boolean `true` and `false` constants. |
+| `decompile-complex-constant-dynamic` | `dcc` | BOOLEAN | `false` | Decompile `constant-dynamic` expressions that cannot be faithfully represented as a lazy Java expression. Emits a comment noting the approximation. |
+| `incorporate-returns` | `ner` | BOOLEAN | `true` | Integrate return statements into try-catch blocks instead of storing them in a temporary variable. |
+| `simplify-stack` | `ssp` | BOOLEAN | `true` | Perform a second-pass stack simplification to resugar complex statements. |
+| `ensure-synchronized-monitors` | `esm` | BOOLEAN | `true` | Attempt to deduce a missing `monitorexit` for synchronized blocks that have a `monitorenter` but no corresponding exit. |
+| `force-jsr-inline` | `fji` | BOOLEAN | `false` | Force processing of JSR instructions even in Java 7+ class files that should not contain them. |
+| `try-loop-fix` | `tlf` | BOOLEAN | `true` | Fix rare decompilation defects caused by try blocks inside while loops. |
+
+---
+
+## 2. Output Cleanup
+
+Options that remove noise and reduce verbosity in the generated source.
+
+| Long name | Short | Type | Default | Description |
+|---|---|---|---|---|
+| `remove-bridge` | `rbr` | BOOLEAN | `true` | Remove methods flagged as bridge methods from the output. |
+| `remove-synthetic` | `rsy` | BOOLEAN | `true` | Remove methods and fields flagged as synthetic from the output. |
+| `remove-getclass` | `rgn` | BOOLEAN | `true` | Remove synthetic `getClass()` calls generated by code like `obj.new Inner()`. |
+| `hide-empty-super` | `hes` | BOOLEAN | `true` | Hide no-argument `super()` calls. |
+| `hide-default-constructor` | `hdc` | BOOLEAN | `true` | Hide constructors that have no parameters and no body. |
+| `remove-empty-try-catch` | `rer` | BOOLEAN | `true` | Remove try-catch blocks that contain no code. |
+| `remove-imports` | `rim` | BOOLEAN | `false` | Strip import statements from the decompiled output entirely. |
+| `skip-extra-files` | `sef` | BOOLEAN | `false` | Do not copy non-class resources (images, manifests, etc.) from the input to the output. |
+| `inline-simple-lambdas` | `isl` | BOOLEAN | `true` | Remove braces from single-expression lambda bodies. |
+| `override-annotation` | `ovr` | BOOLEAN | `true` | Add `@Override` annotations to methods that the decompiler can verify override a supertype method. |
+| `prettify-ifs` | — | BOOLEAN | `true` | Apply heuristics to restructure if statements into a more readable form. |
+| `mark-corresponding-synthetics` | `mcs` | BOOLEAN | `false` | Annotate lambdas and anonymous/local classes with their corresponding synthetic constructs. |
+
+---
+
+## 3. Naming & Variables
+
+Options controlling how identifiers and variable names appear in the output.
+
+| Long name | Short | Type | Default | Description |
+|---|---|---|---|---|
+| `use-lvt-names` | `udv` | BOOLEAN | `true` | Use names from the Local Variable Table (LVT) debug attribute instead of generated names like `var3_1`. |
+| `use-method-parameters` | `ump` | BOOLEAN | `true` | Use parameter names from the `MethodParameters` attribute when available. |
+| `rename-members` | `ren` | BOOLEAN | `false` | Rename classes, fields, and methods with a numeric suffix to aid deobfuscation. |
+| `user-renamer-class` | `urc` | STRING | `""` | Fully qualified name of a class on the classpath that implements `IIdentifierRenamer`. Used when `rename-members` is enabled. |
+| `undefined-as-object` | `uto` | BOOLEAN | `true` | Treat types that cannot be resolved as `java.lang.Object`. |
+| `synthetic-not-set` | `nns` | BOOLEAN | `false` | Treat well-known synthetic constructs as synthetic even when the `ACC_SYNTHETIC` flag is absent. |
+
+---
+
+## 4. Formatting
+
+Options that affect how the source text is laid out.
+
+| Long name | Short | Type | Default | Description |
+|---|---|---|---|---|
+| `indent-string` | `ind` | STRING | `"   "` (3 spaces) | String inserted for each indentation level. Use `\t` for tabs. |
+| `preferred-line-length` | `pll` | INTEGER | `160` | Maximum line length before the formatter attempts to break the line. |
+| `banner` | `ban` | STRING | `""` | Text prepended verbatim to the top of every decompiled file. |
+| `new-line-separator` | `nls` | BOOLEAN | system | *(Deprecated)* Use `\n` instead of `\r\n` for line endings. Defaults to `true` on non-Windows systems. Do not use in new integrations. |
+
+---
+
+## 5. Performance
+
+| Long name | Short | Type | Default | Description |
+|---|---|---|---|---|
+| `thread-count` | `thr` | INTEGER | all available processors | Number of threads to use during decompilation. Set to `1` for fully sequential processing. |
+| `max-time-per-method` | `mpm` | INTEGER | `0` (disabled) | *(Deprecated)* Maximum seconds to spend decompiling a single method. `0` disables the timeout. Do not use in new integrations. |
+
+---
+
+## 6. Classpath & Runtime
+
+Options that tell Vineflower about the wider classpath so it can resolve types accurately.
+
+| Long name | Short | Type | Default | Description |
+|---|---|---|---|---|
+| `include-runtime` | `jrt` | STRING | `"1"` | Provide the Java runtime to the decompiler. `1` or `current` uses the running JDK's JRT; a filesystem path loads a different runtime; `0` disables runtime inclusion. |
+| `include-classpath` | `iec` | BOOLEAN | `false` | Add every JAR on the current JVM classpath as a library source. |
+| `explicit-generics` | `ega` | BOOLEAN | `false` | Emit explicit diamond generic arguments on method calls instead of relying on inference. |
+
+---
+
+## 7. Debugging
+
+Options useful when diagnosing decompiler problems or developing Vineflower itself.
+
+| Long name | Short | Type | Default | Description |
+|---|---|---|---|---|
+| `log-level` | `log` | STRING | `"info"` | Minimum log severity to emit. One of: `trace`, `info`, `warn`, `error`. |
+| `dump-bytecode-on-error` | `dbe` | BOOLEAN | `true` | Embed raw bytecode disassembly in the method body when decompilation of that method fails. |
+| `dump-exception-on-error` | `dee` | BOOLEAN | `true` | Include the exception message and stack trace as a comment in the output when a class cannot be fully decompiled. |
+| `decompiler-comments` | `dec` | BOOLEAN | `true` | Add inline comments to the output when the decompiler encounters unusual or unfixable bytecode patterns. |
+| `sourcefile-comments` | `sfc` | BOOLEAN | `false` | Add a comment showing the `SourceFile` debug attribute at the top of each class, when present. |
+| `bytecode-source-mapping` | `bsm` | BOOLEAN | `false` | Map bytecode offsets to output source lines and embed the mapping in the output. |
+| `dump-code-lines` | `dcl` | BOOLEAN | `false` | Write line-number mapping data into the ZIP entry extra-data field of the output archive. |
+| `dump-text-tokens` | `dtt` | BOOLEAN | `false` | Dump text tokens for each class file into the output (for decompiler development). |
+| `show-hidden-statements` | `shs` | BOOLEAN | `false` | Display hidden code blocks in the output (useful for diagnosing statement-parsing issues). |
+| `ignore-invalid-bytecode` | `iib` | BOOLEAN | `false` | Continue decompilation even when malformed bytecode is encountered instead of aborting. |
+| `verify-anonymous-classes` | `vac` | BOOLEAN | `false` | Verify that anonymous classes resolved from the inner-class attribute are genuinely local. |
+| `warn-inconsistent-inner-attributes` | `win` | BOOLEAN | `true` | Emit a warning when inner class attributes are inconsistent between the outer and inner class files. |
+| `error-message` | `erm` | STRING | Vineflower issue-tracker URL | Text appended to error comments in the output when decompilation fails. |
+
+---
+
+## 8. Filtering
+
+Options to limit which classes are decompiled.
+
+| Long name | Short | Type | Default | Description |
+|---|---|---|---|---|
+| `excluded-classes` | — | STRING | `""` | Regular expression. Classes whose fully qualified names match are excluded from decompilation. |
+| `included-classes` | — | STRING | `""` | Regular expression. Only classes whose fully qualified names match are decompiled (empty = include all). |
+| `method-to-decompile` | — | STRING | `""` | Decompile only the specified method. Format: `owner.nameDescriptor` (e.g. `com/example/Foo.bar()V`). When only a single class is decompiled the owner prefix may be omitted. |
+
+---
+
+## 9. Miscellaneous
+
+| Long name | Short | Type | Default | Description |
+|---|---|---|---|---|
+| `ascii-strings` | `asc` | BOOLEAN | `false` | Encode non-ASCII characters in string and character literals as Unicode escapes (`\uXXXX`). |
+| `keep-literals` | `lit` | BOOLEAN | `false` | Keep `NaN`, infinity, and common math constants (such as π) as raw numeric values rather than their symbolic equivalents. |
+| `boolean-as-int` | `bto` | BOOLEAN | `true` | Treat integer values `0` and `1` as `false` and `true` where a boolean type is expected. |
+| `validate-inner-classes-names` | — | BOOLEAN | `true` | Validate that inner class names follow the `OuterClass$InnerClass` convention; skip processing if they do not. |
+| `verify-merges` | `vvm` | BOOLEAN | `false` | *(Experimental)* Apply stricter validation when merging variable definitions. Improves correctness in rare cases at the cost of output readability. |
+| `verify-pre-post-merges` | `pvm` | BOOLEAN | `false` | *(Experimental)* Verify that code before and after a variable merge is semantically equivalent. |
+| `old-try-dedup` | — | BOOLEAN | `false` | *(Experimental)* Use the legacy try-deduplication algorithm that inserts dummy exception handlers instead of duplicating blocks. |

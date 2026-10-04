@@ -1,0 +1,314 @@
+---
+title: "Custom Output Handling with IResultSaver"
+sidebarTitle: "Custom Output"
+description: "Implement IResultSaver to route Vineflower's decompiled output anywhere — memory maps, custom archives, databases, or streaming endpoints."
+---
+
+Every piece of text Vineflower produces passes through a single interface: `IResultSaver`. The interface separates decompilation logic from output concerns completely, which means you can direct decompiled source to a flat folder, a ZIP archive, an in-memory map, a database, a remote storage bucket, or any combination — all without touching decompiler internals. This guide documents every method in `IResultSaver`, explains when the built-in file and archive savers are sufficient, and provides complete worked examples for common custom scenarios.
+
+## When to Implement `IResultSaver` vs. Using Built-in Savers
+
+The built-in `ConsoleDecompiler` handles three output modes automatically based on whether your destination path ends with `.jar`/`.zip` (archive mode), is a directory (folder mode), or is omitted (console / stdout mode). If your use case fits one of those three shapes, you do not need to write your own `IResultSaver`.
+
+You **do** need a custom implementation when you want to:
+- Route output to an in-memory structure (e.g., for testing or live inspection)
+- Stream decompiled sources directly to a network socket or HTTP response
+- Apply post-processing (license header injection, formatting, import sorting) before writing
+- Write to a database or content-addressable store
+- Emit output in a custom archive format
+- Intercept the bytecode-to-source line mappings alongside the decompiled text
+
+## `IResultSaver` Interface Reference
+
+`IResultSaver` extends `AutoCloseable`. Vineflower calls your implementation's methods in two distinct contexts: **folder output** (for directory or class-file inputs) and **archive output** (for JAR/ZIP inputs). Understanding which context triggers which method is key to writing a correct implementation.
+
+### Folder output methods
+
+<ParamField path="saveFolder(String path)" type="method">
+Called once per directory entry that needs to exist in the output. `path` is relative to the root you chose. Create the directory structure here.
+</ParamField>
+
+<ParamField path="copyFile(String source, String path, String entryName)" type="method">
+Called for non-class resources (images, property files, etc.) that should be copied verbatim from `source` (absolute path on disk) to `path/entryName` in your output. Only called when `skip-extra-files` is `0` (the default).
+</ParamField>
+
+<ParamField path="saveClassFile(String path, String qualifiedName, String entryName, String content, int[] mapping)" type="method">
+The primary callback for folder-mode decompilation. `content` is the complete decompiled Java source. `entryName` is the relative file path (e.g., `com/example/Foo.java`). `mapping` is a flat array of `(bytecode-line, source-line)` pairs, or `null` when `bytecode-source-mapping` is disabled.
+</ParamField>
+
+### Archive output methods
+
+<ParamField path="createArchive(String path, String archiveName, Manifest manifest)" type="method">
+Called once when Vineflower starts processing a JAR/ZIP input. Open or create your output archive here. `manifest` may be `null` for plain ZIP inputs; non-null for JARs.
+</ParamField>
+
+<ParamField path="saveDirEntry(String path, String archiveName, String entryName)" type="method">
+Called for directory entries that should be written into the archive.
+</ParamField>
+
+<ParamField path="copyEntry(String source, String path, String archiveName, String entry)" type="method">
+Called for non-class entries (resources) from the input archive that should be copied verbatim into the output archive.
+</ParamField>
+
+<ParamField path="saveClassEntry(String path, String archiveName, String qualifiedName, String entryName, String content)" type="method">
+Called for each decompiled class that should be written into the output archive. `content` is the full source text. This is the archive-mode equivalent of `saveClassFile`.
+</ParamField>
+
+<ParamField path="saveClassEntry(String path, String archiveName, String qualifiedName, String entryName, String content, int[] mapping)" type="method">
+Default-method override of the above that also carries the `mapping` array. The default implementation delegates to the five-argument form; override this one if you want line-mapping data from archive decompilation.
+</ParamField>
+
+<ParamField path="closeArchive(String path, String archiveName)" type="method">
+Called when all entries for an archive have been written. Flush and close your output stream here.
+</ParamField>
+
+### Utility methods
+
+<ParamField path="getCodeLineData(int[] mappings)" type="default method">
+Helper that serialises the line-mapping array into the ForgeFlower ZIP extra-data format (header `0x4646`, version byte `1`, followed by the mapping pairs as little-endian shorts). Call this from `saveClassEntry` when you want to embed mappings in ZIP entry extra data, exactly as `ConsoleDecompiler` does when `dump-code-lines` is enabled.
+</ParamField>
+
+<ParamField path="close()" type="default method">
+Called automatically because `IResultSaver` extends `AutoCloseable`. Release any open file handles or streams here. The default implementation is a no-op.
+</ParamField>
+
+## Complete Examples
+
+<CodeGroup>
+
+```java InMemoryResultSaver.java
+import org.jetbrains.java.decompiler.main.extern.IResultSaver;
+
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.jar.Manifest;
+
+/**
+ * Collects all decompiled source into an in-memory map.
+ * Key: qualified class name (e.g. "com/example/Foo").
+ * Value: decompiled Java source text.
+ */
+public class InMemoryResultSaver implements IResultSaver {
+    private final ConcurrentHashMap<String, String> results = new ConcurrentHashMap<>();
+
+    /** Returns the collected sources after decompile() completes. */
+    public ConcurrentHashMap<String, String> getResults() {
+        return results;
+    }
+
+    // --- Folder-mode callbacks ---
+
+    @Override
+    public void saveFolder(String path) {
+        // No directories needed in memory
+    }
+
+    @Override
+    public void copyFile(String source, String path, String entryName) {
+        // Non-class resources are ignored for this example
+    }
+
+    @Override
+    public void saveClassFile(String path, String qualifiedName,
+                               String entryName, String content, int[] mapping) {
+        if (content != null) {
+            results.put(qualifiedName, content);
+        }
+    }
+
+    // --- Archive-mode callbacks ---
+
+    @Override
+    public void createArchive(String path, String archiveName, Manifest manifest) {}
+
+    @Override
+    public void saveDirEntry(String path, String archiveName, String entryName) {}
+
+    @Override
+    public void copyEntry(String source, String path,
+                          String archiveName, String entry) {}
+
+    @Override
+    public void saveClassEntry(String path, String archiveName,
+                                String qualifiedName, String entryName,
+                                String content) {
+        if (content != null && qualifiedName != null) {
+            results.put(qualifiedName, content);
+        }
+    }
+
+    @Override
+    public void closeArchive(String path, String archiveName) {}
+}
+```
+
+```java ZipResultSaver.java
+import org.jetbrains.java.decompiler.main.extern.IResultSaver;
+
+import java.io.*;
+import java.nio.charset.StandardCharsets;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Map;
+import java.util.Set;
+import java.util.jar.JarOutputStream;
+import java.util.jar.Manifest;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
+
+/**
+ * Writes all decompiled sources into a single ZIP/JAR archive.
+ */
+public class ZipResultSaver implements IResultSaver {
+    private final File outputFile;
+    // Tracks open ZipOutputStreams keyed by "path/archiveName"
+    private final Map<String, ZipOutputStream> streams = new HashMap<>();
+    // Guards against duplicate entries
+    private final Map<String, Set<String>> written = new HashMap<>();
+
+    public ZipResultSaver(File outputFile) {
+        this.outputFile = outputFile;
+    }
+
+    // --- Folder output (not used when target is a ZIP) ---
+
+    @Override
+    public void saveFolder(String path) {}
+
+    @Override
+    public void copyFile(String source, String path, String entryName) {}
+
+    @Override
+    public void saveClassFile(String path, String qualifiedName,
+                               String entryName, String content, int[] mapping) {
+        // Write into the single output archive using the entryName as the zip path
+        writeEntry(outputFile.getPath(), entryName, content);
+    }
+
+    // --- Archive output ---
+
+    @Override
+    public void createArchive(String path, String archiveName, Manifest manifest) {
+        String key = archiveKey(path, archiveName);
+        try {
+            FileOutputStream fos = new FileOutputStream(outputFile);
+            ZipOutputStream zos = manifest != null
+                ? new JarOutputStream(fos, manifest)
+                : new ZipOutputStream(fos);
+            streams.put(key, zos);
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+    }
+
+    @Override
+    public void saveDirEntry(String path, String archiveName, String entryName) {
+        String entry = entryName.endsWith("/") ? entryName : entryName + "/";
+        writeEntry(archiveKey(path, archiveName), entry, null);
+    }
+
+    @Override
+    public void copyEntry(String source, String path,
+                          String archiveName, String entryName) {
+        // For brevity this example skips resource copying
+    }
+
+    @Override
+    public void saveClassEntry(String path, String archiveName,
+                                String qualifiedName, String entryName,
+                                String content) {
+        writeEntry(archiveKey(path, archiveName), entryName, content);
+    }
+
+    @Override
+    public void closeArchive(String path, String archiveName) {
+        String key = archiveKey(path, archiveName);
+        ZipOutputStream zos = streams.remove(key);
+        written.remove(key);
+        if (zos != null) {
+            try { zos.close(); } catch (IOException e) { /* log */ }
+        }
+    }
+
+    @Override
+    public void close() throws IOException {
+        for (ZipOutputStream zos : streams.values()) {
+            zos.close();
+        }
+        streams.clear();
+    }
+
+    // --- Helpers ---
+
+    private void writeEntry(String archiveKey, String entryName, String content) {
+        ZipOutputStream zos = streams.get(archiveKey);
+        if (zos == null) return;
+
+        Set<String> entries = written.computeIfAbsent(archiveKey, k -> new HashSet<>());
+        if (!entries.add(entryName)) return; // duplicate guard
+
+        try {
+            zos.putNextEntry(new ZipEntry(entryName));
+            if (content != null) {
+                zos.write(content.getBytes(StandardCharsets.UTF_8));
+            }
+            zos.closeEntry();
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+    }
+
+    private static String archiveKey(String path, String archiveName) {
+        return path + "/" + archiveName;
+    }
+}
+```
+
+</CodeGroup>
+
+## Token-Level Output Access
+
+For use cases that need richer access than raw source text — syntax highlighting, AST-style analysis, or mapping generation — Vineflower can emit a stream of typed text tokens when `dump-text-tokens` is enabled. Set it via the builder option `IFernflowerPreferences.DUMP_TEXT_TOKENS`.
+
+When this option is active, the decompiler generates a parallel `.tokens` file (or calls an additional output hook in the context of custom savers) containing each token's type, position, and text. This is particularly useful for tooling that needs to correlate source ranges back to specific language constructs without re-parsing the emitted Java.
+
+## Bytecode-to-Source Line Mapping
+
+Vineflower can record the correspondence between original bytecode instruction offsets and the line numbers they are mapped to in the decompiled output. Two options control this:
+
+| Option constant | CLI flag | Default | Effect |
+|---|---|---|---|
+| `BYTECODE_SOURCE_MAPPING` | `--bytecode-source-mapping` | `0` | Enables mapping computation. The `mapping` array is passed to `saveClassFile` / `saveClassEntry`. |
+| `DUMP_CODE_LINES` | `--dump-code-lines` | `0` | Embeds the mapping in ZIP entry extra data using the ForgeFlower format via `getCodeLineData`. |
+| `DUMP_ORIGINAL_LINES` | `__dump_original_lines__` | `0` | Internal option; adds original bytecode line comments inline in the source. |
+
+Enable mapping in the builder:
+
+```java
+Decompiler decompiler = Decompiler.builder()
+    .inputs(new File("app.jar"))
+    .output(mySaver)
+    .option(IFernflowerPreferences.BYTECODE_SOURCE_MAPPING, "1")
+    .option(IFernflowerPreferences.DUMP_CODE_LINES, "1")
+    .build();
+```
+
+Your `saveClassEntry` implementation can then call `getCodeLineData(mapping)` to obtain the serialised byte array and attach it to the ZIP entry's extra field:
+
+```java
+@Override
+public void saveClassEntry(String path, String archiveName,
+                            String qualifiedName, String entryName,
+                            String content, int[] mapping) {
+    ZipEntry entry = new ZipEntry(entryName);
+    byte[] extra = getCodeLineData(mapping);
+    if (extra != null) {
+        entry.setExtra(extra);
+    }
+    zipOutputStream.putNextEntry(entry);
+    // ... write content ...
+}
+```
+
+<Tip>
+The `getCodeLineData` helper is a `default` method on `IResultSaver` itself, so it is available in any implementation without any extra imports or dependencies.
+</Tip>

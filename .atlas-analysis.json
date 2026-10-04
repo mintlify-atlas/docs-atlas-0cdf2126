@@ -1,0 +1,90 @@
+{
+  "projectType": "cli-tool",
+  "projectName": "Vineflower",
+  "projectDescription": "A modern, accurate Java & JVM language decompiler with clean output, multi-threading, and an extensible plugin API — forked from Fernflower.",
+  "theme": "aspen",
+  "primaryColor": "#4A90D9",
+  "lightColor": "#7BB8F0",
+  "darkColor": "#2A5F9E",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "installation"
+            ]
+          },
+          {
+            "group": "Usage",
+            "pages": [
+              "usage/cli",
+              "usage/library",
+              "usage/options"
+            ]
+          },
+          {
+            "group": "Plugin System",
+            "pages": [
+              "plugins/overview",
+              "plugins/writing-plugins",
+              "plugins/pass-system",
+              "plugins/language-spec",
+              "plugins/bundled-plugins"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/integrating",
+              "guides/custom-output",
+              "guides/identifier-renaming",
+              "guides/troubleshooting"
+            ]
+          },
+          {
+            "group": "Reference",
+            "pages": [
+              "reference/api",
+              "reference/interfaces",
+              "reference/architecture",
+              "reference/changelog"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Java 21+ support including records, sealed classes, switch expressions, and pattern matching",
+    "Multi-threaded decompilation for high throughput",
+    "Clean, formatted source output with configurable formatting",
+    "Extensible plugin API with custom pass injection and language support",
+    "CLI and library (programmatic) usage modes",
+    "Kotlin and Scala decompilation via bundled plugins",
+    "Identifier renaming with LVT names and custom renaming strategies",
+    "Legacy FabricMC and Fernflower API compatibility shims"
+  ],
+  "publicApiSurface": [
+    "Decompiler.builder() — fluent Java API entry point",
+    "Fernflower — core engine constructor",
+    "BaseDecompiler — backward-compatible wrapper",
+    "IResultSaver — output handler interface",
+    "IFernflowerLogger — logging interface",
+    "IContextSource — custom input source interface",
+    "IIdentifierRenamer — class/field/method renaming interface",
+    "IVariableNamingFactory / IVariableNameProvider — variable naming interfaces",
+    "Plugin — plugin interface (id, registerJavaPasses, getLanguageSpec, getPluginOptions)",
+    "JavaPassRegistrar — registers Pass/ClassPass at JavaPassLocation",
+    "Pass / ClassPass — functional pass interfaces",
+    "PassContext — context provided to passes (RootStatement, CFG, StructMethod, etc.)",
+    "LanguageSpec — full custom language definition",
+    "ConsoleDecompiler — CLI entry point (main method)",
+    "IFernflowerPreferences — all decompiler option constants",
+    "TextTokenVisitor — token-level visitor over decompiled output"
+  ]
+}
